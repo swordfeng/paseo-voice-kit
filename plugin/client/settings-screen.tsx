@@ -30,7 +30,7 @@ import {
   type Status,
 } from "../shared/rpc";
 import { LANGUAGES } from "../shared/languages";
-import { DEFAULT_PORT, preferences, type Preferences } from "../shared/settings";
+import { DEFAULT_PORT, GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, preferences, type Preferences } from "../shared/settings";
 import { CustomModelForm } from "./custom-model-form";
 import { formatBytes, percent, phaseTone, type Tone } from "./format";
 import {
@@ -256,7 +256,16 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   if (!values) return <Loading />;
 
   const st = status.data;
-  const modelList = models.data?.models ?? [];
+  // Your own models show their saved name and languages right away, even while the server's model
+  // list still reports the old ones. Qwen3-TTS keeps its fixed languages; an explicit empty list
+  // (speech recognition with no languages given) stays empty.
+  const modelList = (models.data?.models ?? []).map((m) => {
+    const own = values.customModels.find((c) => c.id === m.id);
+    if (!own) return m;
+    const fixed = MLX_FAMILY_VALUES.has(own.family ?? "") || own.family === GGUF_QWEN_FAMILY;
+    const languages = own.languages === undefined || fixed ? m.languages : own.languages;
+    return { ...m, label: own.label, languages };
+  });
   const byId = new Map(modelList.map((m) => [m.id, m]));
   const siteStatus = (site: Site): SiteStatus | undefined => st?.sites.find((s) => s.site === site);
 
@@ -414,7 +423,14 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
       removeCustom={removeCustom}
       onAdd={() => setAdding(kind)}
       restart={() => action.mutate(() => restart({}))}
-      saveSettings={saveNow}
+      saveSettings={async (patch) => {
+        const result = await saveNow(patch);
+        // Names and languages of your models feed the model list and voices: fetch them again.
+        if (result.ok && patch.customModels) {
+          void queryClient.invalidateQueries({ queryKey: ["voicekit"], predicate: (q) => q.queryKey[1] === "models" || q.queryKey[1] === "voices" });
+        }
+        return result;
+      }}
       routes={routes}
       kind={kind}
     />
@@ -704,7 +720,7 @@ function downloadSummary(t: Translate, status: Status | undefined, labelOf: (id:
 
 /** What the voices RPC depends on in the settings: the ordered list and your own voice models. */
 function voiceConfigKey(values: Preferences): string {
-  const own = values.customModels.filter((m) => m.kind === "tts").map((m) => [m.id, m.location ?? m.hfRepo ?? m.baseUrl ?? "", (m.languages ?? []).join("+")].join(":"));
+  const own = values.customModels.filter((m) => m.kind === "tts").map((m) => [m.id, m.label, m.location ?? m.hfRepo ?? m.baseUrl ?? "", (m.languages ?? []).join("+")].join(":"));
   return [values.ttsModels.join(","), own.join(",")].join("|");
 }
 

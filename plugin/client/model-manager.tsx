@@ -205,7 +205,7 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
         </View>
       ) : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-        <Chip theme={theme}>{languageSummary(t, locale, m.languages)}</Chip>
+        {m.languages.length ? <Chip theme={theme}>{languageSummary(t, locale, m.languages)}</Chip> : null}
         {!remote && m.sizeBytes > 0 ? <Chip theme={theme}>{formatBytes(m.sizeBytes)}</Chip> : null}
         {hardwareChips(t, m, status, props.routes, values.accelerator).map((chip) => (
           <Chip key={chip} theme={theme}>
