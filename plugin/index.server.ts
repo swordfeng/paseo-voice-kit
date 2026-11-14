@@ -12,6 +12,8 @@ import {
   restartRpc,
   statusRpc,
   voicesRpc,
+  mlxRuntimeRpc,
+  installMlxRuntimeRpc,
   type Engine,
   type Reason,
   type Model,
@@ -32,6 +34,8 @@ import { Supervisor, type ServerConfig, type SupervisorSnapshot } from "./server
 import { voicekit, voicekitJson } from "./server/voicekit-api";
 import { writeCustomCatalog } from "./server/custom-models";
 import { lookup as hfLookup } from "./server/huggingface";
+import { MlxRuntimeInstaller } from "./server/mlx-runtime";
+import { featurePhase } from "./server/feature-phase";
 
 /**
  * Preview reads the selected speech language's line, or English when it is automatic.
@@ -130,6 +134,15 @@ export default function contribute(server: PluginServerContext) {
   const supervisor = new Supervisor((snap) => publish(snap));
   const memory = new MemorySampler();
   const listeningDefault = new DefaultSttModel();
+  const mlxRuntime = new MlxRuntimeInstaller({
+    binary: () => supervisor.state.binary?.path ?? null,
+    installed: () => {
+      // Drop any failed-worker cooldown by reapplying the current settings, without changing them.
+      if (!stopped) void settings.read().then(current => {
+        if (!stopped && current.status === "ready") return applyPrefs(current.values, true);
+      }).catch(error => supervisor.note(`[voice-kit] MLX setup completed; speech server refresh failed: ${String(error)}`));
+    },
+  });
   let defaultSttModel: string | null = null;
   const sharedModels = new PaseoModels({
     changed: () => publish(),
@@ -138,7 +151,8 @@ export default function contribute(server: PluginServerContext) {
     },
   });
   function sharedSnapshot(snap: SupervisorSnapshot): SupervisorSnapshot {
-    return snap.health ? { ...snap, health: { ...snap.health, downloads: { ...snap.health.downloads, ...sharedModels.progress() } } } : snap;
+    const phase = featurePhase(prefs, snap);
+    return snap.health ? { ...snap, phase, message: phase === "ready" ? null : snap.message, health: { ...snap.health, downloads: { ...snap.health.downloads, ...sharedModels.progress() } } } : snap;
   }
 
   function publish(snap: SupervisorSnapshot = supervisor.state) {
@@ -247,6 +261,9 @@ export default function contribute(server: PluginServerContext) {
     await withSession(context);
     return { ok: true };
   });
+
+  server.handle(mlxRuntimeRpc, async () => mlxRuntime.status());
+  server.handle(installMlxRuntimeRpc, async ({ confirmed }) => mlxRuntime.install(confirmed));
 
   server.handle(statusRpc, async (_input, context): Promise<Status> => {
     await withSession(context);
@@ -374,6 +391,7 @@ export default function contribute(server: PluginServerContext) {
     if (defaultRetry) clearTimeout(defaultRetry);
     clearInterval(sweep);
     unsubscribe();
+    await mlxRuntime.dispose();
     await sharedModels.dispose();
     await ready;
     await pendingPrefs.catch(() => undefined);

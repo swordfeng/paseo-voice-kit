@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(join(root, "plugin/package.json"));
 const { build } = require("esbuild");
-const suites = ["default-stt", "empty-voices", "memory", "mlx-catalog", "paseo-models", "settings-json", "settings-writer", "speech-switch", "tts-chain", "voice-chain"];
+const suites = ["default-stt", "empty-voices", "feature-phase", "memory", "mlx-catalog", "mlx-runtime", "paseo-models", "settings-json", "settings-writer", "speech-switch", "tts-chain", "voice-chain"];
 const temporary = await mkdtemp(join(tmpdir(), "voicekit-tests-"));
 try {
   for (const suite of suites) {

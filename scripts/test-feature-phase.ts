@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { featurePhase } from "../plugin/server/feature-phase";
+import { preferencesSchema } from "../plugin/shared/settings";
+import type { SupervisorSnapshot } from "../plugin/server/supervisor";
+const model = "whisper-large-v3-turbo-q5_0";
+const prefs = preferencesSchema.parse({ dictationModel: model, voiceInputModel: model });
+const snap = { phase: "degraded", health: { stt: [{ model, available: true }], tts: { available: false }, downloads: {} } } as SupervisorSnapshot;
+assert.equal(featurePhase({ ...prefs, useForVoiceOutput: false }, snap), "ready", "disabled speaking cannot degrade working listening");
+assert.equal(featurePhase({ ...prefs, ttsModels: [] }, snap), "ready", "an explicitly empty voice list is not a failure");
+assert.equal(featurePhase(prefs, snap), "degraded", "a requested but unavailable voice still degrades status");
+const voiceOnly = { ...snap, health: { ...snap.health!, stt: [{ model, state: "failed", available: false }], tts: { model: "chain", state: "ready", available: true } } };
+assert.equal(featurePhase({ ...prefs, useForDictation: false, useForVoiceInput: false }, voiceOnly), "ready");
+assert.equal(featurePhase(prefs, voiceOnly), "degraded");
+assert.equal(featurePhase({ ...prefs, useForDictation: false, useForVoiceInput: false, useForVoiceOutput: false }, snap), "disabled");
+assert.equal(featurePhase(prefs, { ...snap, phase: "installing" }), "installing");
+assert.equal(featurePhase(prefs, { ...snap, health: null }), "degraded", "health-check failures are still reported");
+assert.equal(featurePhase({ ...prefs, enabled: false }, snap), "disabled");
+console.log("PASS readiness counts enabled features only, preserving active failures and lifecycle states");

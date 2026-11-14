@@ -224,6 +224,23 @@ export type Voice = z.infer<typeof VoiceSchema>;
 const Empty = z.object({});
 const Ok = z.object({ ok: z.boolean() });
 
+/** Optional MLX environment setup, explicitly requested by the user; never downloads weights. */
+export const MlxRuntimeSchema = z.object({
+  phase: z.enum(["missing", "installing", "ready", "failed", "unavailable"]),
+  reason: z.enum(["platform", "pythonRequired", "runtimeRequired", "externalRuntime"]).nullable(),
+  path: z.string(),
+  python: z.string().nullable(),
+  error: z.string().nullable(),
+  lines: z.array(z.string()),
+});
+export type MlxRuntime = z.infer<typeof MlxRuntimeSchema>;
+export const mlxRuntimeRpc = defineRpc({ name: "voicekit.mlx.status", input: Empty, output: MlxRuntimeSchema });
+export const installMlxRuntimeRpc = defineRpc({
+  name: "voicekit.mlx.install",
+  input: z.object({ confirmed: z.literal(true) }),
+  output: MlxRuntimeSchema,
+});
+
 /** Called by every client entry on load. Gives the backend its daemon session. */
 export const attachRpc = defineRpc({ name: "voicekit.attach", input: Empty, output: Ok });
 export const statusRpc = defineRpc({ name: "voicekit.status", input: Empty, output: StatusSchema });
