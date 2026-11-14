@@ -47,6 +47,7 @@ for package in sorted(json.loads(metadata.read_text(encoding='utf-8'))['packages
         shutil.copy2(project / 'licenses/whatlang-MIT.txt', destination / 'LICENSE')
     elif not files and name == 'wsola' and version == '0.3.0' and license_id == 'MIT':
         shutil.copy2(project / 'licenses/wsola-MIT.txt', destination / 'LICENSE-MIT.txt')
+        shutil.copy2(project / 'licenses/wsola-upstream-Apache-2.0.txt', destination / 'LICENSE-upstream-Apache-2.0.txt')
         shutil.copy2(source / 'Cargo.toml.orig', destination / 'Cargo.toml.orig')
     elif not files:
         missing.append(name + '-' + version)

@@ -1,8 +1,13 @@
 wsola 0.3.0
 Author listed by the published package: Jacob Heider
 Source: https://github.com/jhheider/pdcst/tree/d74c46c9457770372a4f4c9d61fe6de9202d84f6/crates/wsola
-The published Cargo.toml declares license = "MIT" but omits a license text file.
-Its original package manifest is also included in the generated native notices.
+The published Cargo.toml and README declare MIT but the package omits a license
+text file. The pinned upstream repository's root LICENSE instead contains
+Apache-2.0. These upstream declarations disagree; both texts are preserved here
+without resolving that discrepancy. The MIT text below accompanies the package's
+declaration. The repository LICENSE is included verbatim as
+wsola-upstream-Apache-2.0.txt, and the original package manifest is also included
+in the generated native notices.
 
 MIT License
 
