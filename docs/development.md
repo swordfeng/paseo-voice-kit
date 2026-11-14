@@ -91,11 +91,14 @@ afterwards.
 ## Releases
 
 v0.1.0 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0).
-0.1.1 (Qwen3-TTS speed and stable GGUF sampling) is being prepared and isn't published;
-`plugin/shared/release.ts` still pins 0.1.0. Its CI is planned to add speech smoke tests with
-real models on the CPU on all five platforms (Whisper base, Qwen3-ASR, Supertonic 3 and
-Qwen3-TTS 0.6B GGUF). This section will record the results once they pass; GPU inference on
-Windows and Linux stays unverified.
+0.1.1 (Qwen3-TTS speed and stable GGUF sampling) is being prepared and isn't tagged or
+published; `plugin/shared/release.ts` still pins 0.1.0. Its source passed the real-model CPU
+checks on all five platforms, in separate manual CI runs rather than one all-green run:
+darwin-arm64, linux-arm64 and linux-x64 at `6ef5128`, and win32-x64 and darwin-x64 at
+`55d84e2`, which differs only in a test fixture. The tagged release still has to pass its own
+gates, and its public checksums must be verified, before `release.ts` changes. Method and
+results are in [eval.md](eval.md#real-model-cpu-checks-for-011-2026-11-14). GPU inference on
+Windows, Linux and Intel Macs stays unverified.
 `plugin/shared/release.ts` pins each platform's archive URL and SHA-256; a local build
 (`dev-install.sh`) or the Binary path setting takes precedence over it.
 
@@ -115,13 +118,18 @@ and Ninja; Windows uses the LunarG SDK. On every platform CI runs the native tes
 `--version`, `devices`, and the HTTP server with stub engines (health, a speech request,
 and a request without the token being refused). It also checks that the Linux executable
 has no `libvulkan` dependency and that Windows needs no unpackaged Visual C++ runtime.
-All five platforms passed for v0.1.0.
+All five platforms passed for v0.1.0. For 0.1.1, CI also runs `scripts/smoke-real-models.py`
+on the unpacked asset with `--accelerator cpu` (short real-model checks, see
+[eval.md](eval.md#real-model-cpu-checks-for-011-2026-11-14)), and on Linux arm64
+`scripts/test-sve-dots.py --require-sve`, which checks the packaged SVE dot-product kernels
+against exact scalar results.
 
 Tested beyond CI: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu 22.04,
 clang 14), including real Whisper transcription with and without a Vulkan loader, and
 lavapipe; Linux x64 the same way under emulation, running `devices` and a Whisper encoder
-pass. Not verified yet: real inference on Windows, Intel Macs and Linux or Windows GPUs;
-the Paseo app in right-to-left languages; and a fresh install end to end.
+pass. Not verified yet: GPU inference on Windows, Linux and Intel Macs; a full Paseo
+install on Windows, Linux and Intel Macs (a fresh Git install was tested on an Apple Silicon
+Mac); and the Paseo app in right-to-left languages.
 
 To publish, push a `v*` tag. CI builds every platform's asset and publishes them with
 `SHA256SUMS`. Then pin them for the plugin:

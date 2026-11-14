@@ -112,11 +112,16 @@ needs Vulkan headers and `glslc`. For a CPU-only build, use
 - **Release builds** for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and
   Windows (x64) pass CI on each platform: the native tests, unpacking the archive the way
   the plugin does, and a smoke test of the server's HTTP interface with stub engines.
+- **Real models on the CPU**: the source for 0.1.1 (not yet released) passed short checks
+  with real models on the CPU on all five platforms: Whisper base, Qwen3-ASR, Supertonic 3
+  and Qwen3-TTS 0.6B GGUF, plus Qwen3-TTS 1.7B on Linux x64 and Windows. They cover English
+  and Chinese round trips and Qwen3-TTS at speed 1 and 1.25, not quality in every language.
+  Details are in [docs/eval.md](docs/eval.md).
 - **Linux** also runs real Whisper transcription in Docker on Apple Silicon (arm64
   natively, x64 under emulation), including on a software Vulkan driver.
-- **Not verified yet**: real speech recognition and voices on Windows, Intel Macs and
-  Linux GPUs; the Paseo app in right-to-left languages; and a fresh install from start to
-  finish.
+- **Not verified yet**: GPU inference on Windows, Linux and Intel Macs; a full Paseo
+  install on Windows, Linux and Intel Macs (a fresh install from Git has been tested on an
+  Apple Silicon Mac); and the Paseo app in right-to-left languages.
 
 ## Everyday settings
 

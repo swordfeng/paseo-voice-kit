@@ -12,7 +12,7 @@ The speech server is a separate native program. Prebuilt servers for macOS (Appl
 
 The built-in Qwen3-TTS models run in Voice Kit's own native worker. Only Qwen3-TTS models you add for MLX use Python: they need a Mac with Apple Silicon, macOS 14 or later, Python 3.12 and an MLX environment. Voice Kit offers to install that environment when you add such a model and asks first; it installs Python packages from PyPI (checked against pinned hashes), not Python itself, and never installs anything without your confirmation.
 
-Requires Paseo 0.15.4 or later with plugins enabled. Daily use so far is on macOS with Apple Silicon. On every release platform, automated tests build the server, run its native tests, unpack the archive as Voice Kit does and check the speech server with stand-in engines. Real speech on Windows, Intel Macs and Linux GPUs has not been verified yet.
+Requires Paseo 0.15.4 or later with plugins enabled. Daily use so far is on macOS with Apple Silicon. On every release platform, automated tests build the server, run its native tests, unpack the archive as Voice Kit does and check the speech server with stand-in engines. The source for the upcoming 0.1.1 also passed short checks with real models on the CPU on all five platforms. GPU speech on Windows, Linux and Intel Macs, and full installs there, have not been verified yet.
 
 ## Models
 

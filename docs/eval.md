@@ -205,3 +205,46 @@ temperature 0.7 and seed 42 by default; the acoustic sub-talker keeps its upstre
 settings. MLX sampling is unchanged. Deterministic repeats do not establish that
 speaker identity stays equally stable across different texts or languages; that
 still needs listening evaluation.
+
+## Real-model CPU checks for 0.1.1 (2026-11-14)
+
+`scripts/smoke-real-models.py` runs short real inference against an unpacked native
+package, never installed into Paseo, with `--accelerator cpu`. It downloads only the pinned
+built-ins it uses. CPU is intentional for portable CI; on Macs, CPU workers now skip Metal
+initialization, so every report entry says `device=cpu`. GPU inference is not covered.
+
+Models on every platform: Whisper base (Q5_1), Qwen3-ASR 0.6B (int8), Supertonic 3 and
+Qwen3-TTS 0.6B GGUF (Q4). Linux x64 and Windows also run Qwen3-TTS 1.7B GGUF (Q8). Checks:
+mono 16-bit audio that isn't silent; an English Whisper round trip; Qwen3-TTS 0.6B Chinese
+at speed 1 and 1.25 (duration); Qwen3-ASR English and Chinese content with no control
+markers in the text; and, on the two x64 platforms, a Qwen3-TTS 1.7B Chinese tempo and ASR
+round trip. Qwen3-ASR decodes a `language …<asr_text>` header before the transcript; since
+`3d1ae47` the server keeps only the text after it (for that family only), and the checks
+require no such marker.
+
+| Platform | Source | Model checks | Model suite time |
+| --- | --- | --- | --- |
+| darwin-arm64 | `6ef5128` | 4 | 169.61 s |
+| linux-arm64 | `6ef5128` | 4 | 134.44 s |
+| linux-x64 | `6ef5128` | 5 | 129.95 s |
+| win32-x64 | `55d84e2` | 5 | 134.31 s |
+| darwin-x64 | `55d84e2` | 4 | 235.89 s |
+
+Qwen3-TTS 0.6B durations at speed 1 and 1.25: darwin-arm64 3.12 → 2.496 s, linux-arm64
+3.04 → 2.432 s, linux-x64 2.4 → 1.92 s, win32-x64 2.72 → 2.176 s, darwin-x64 2.64 →
+2.112 s. Qwen3-TTS 1.7B: linux-x64 2.16 → 1.728 s, win32-x64 2.56 → 2.062 s (the check
+allows 80 ms). The Whisper base transcript on Linux arm64 was "Hello, this is as a speech
+test.", close to but not exactly the input; the earlier repeated-word output didn't recur.
+
+Linux arm64: ggml's SVE dot products dropped accumulated tail lanes, giving wrong results on
+CPUs with SVE. `6ef5128` keeps them, and `scripts/test-sve-dots.py --require-sve` checks the
+packaged kernels against exact scalar results: 3 compatible variants (armv8.2_3,
+armv8.6_1, armv8.6_2), 22 checks each, 16-byte SVE width, none skipped.
+
+These were separate manual runs, not one all-green run. The first full run failed: a
+Windows test fixture read a non-blocking accepted socket (fixed in `55d84e2`, a
+test-only change), and an Intel Mac model download timed out before inference. Both then
+passed in focused runs. The tagged 0.1.1 release must pass its own gates. The checks are
+short content and timing checks in English and Chinese, not quality scores for every
+language, and the times are from shared CI runners.
+
