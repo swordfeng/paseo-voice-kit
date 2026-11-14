@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-msvc]
+# sherpa-onnx ships /MT native archives. Keep Rust and whisper.cpp on the same CRT.
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "digestSources": [
+    "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/v2.0.1",
+    "https://api.github.com/repos/mamba-org/micromamba-releases/releases/tags/2.10.0-0",
+    "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/k/KhronosGroup/VulkanSDK/1.4.341.1/KhronosGroup.VulkanSDK.installer.yaml"
+  ],
+  "inputs": {
+    "sherpa-darwin-arm64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-osx-arm64-static-lib.tar.bz2",
+      "file": "sherpa-onnx-v2.0.1-osx-arm64-static-lib.tar.bz2",
+      "sha256": "d7a9b14f337958e7373c8c650f046df33d210bbaff2f33cb8322dda663ee5e1c",
+      "version": "2.0.1"
+    },
+    "sherpa-darwin-x64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-osx-x64-static-lib.tar.bz2",
+      "file": "sherpa-onnx-v2.0.1-osx-x64-static-lib.tar.bz2",
+      "sha256": "6a3cb3c14104d3a02e7b2a6cd5621f590b14892cce7d0bc0935f7655ef518938",
+      "version": "2.0.1"
+    },
+    "sherpa-linux-arm64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-aarch64-static-lib.tar.bz2",
+      "file": "sherpa-onnx-v2.0.1-linux-aarch64-static-lib.tar.bz2",
+      "sha256": "b6c6090e40fd18d6812f04fe21260602cd1223d7b5e83ad39dab87ad7c1c031d",
+      "version": "2.0.1"
+    },
+    "sherpa-linux-x64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-x64-static-lib.tar.bz2",
+      "file": "sherpa-onnx-v2.0.1-linux-x64-static-lib.tar.bz2",
+      "sha256": "55cfadf65ba50d0afc1a802b7a337942819e51c94a5b5a384def1978f7c70871",
+      "version": "2.0.1"
+    },
+    "sherpa-win32-x64": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-win-x64-static-MT-Release-lib.tar.bz2",
+      "file": "sherpa-onnx-v2.0.1-win-x64-static-MT-Release-lib.tar.bz2",
+      "sha256": "23e7b986b197eda0bbc47ff3d7d5c87afd6ef2b9077214ba26b0f1ec52ef0e66",
+      "version": "2.0.1"
+    },
+    "micromamba-linux-x64": {
+      "url": "https://github.com/mamba-org/micromamba-releases/releases/download/2.10.0-0/micromamba-linux-64.tar.bz2",
+      "file": "micromamba-linux-64.tar.bz2",
+      "sha256": "9a97976244929bbae28fb1fae504e74a3e7e6d1932870e3a03321f01b7fbd07b",
+      "version": "2.10.0-0"
+    },
+    "micromamba-linux-arm64": {
+      "url": "https://github.com/mamba-org/micromamba-releases/releases/download/2.10.0-0/micromamba-linux-aarch64.tar.bz2",
+      "file": "micromamba-linux-aarch64.tar.bz2",
+      "sha256": "890bc4906e6ab17f1b393f0da21547f75e000078e573a156316ec925b92a4a4c",
+      "version": "2.10.0-0"
+    },
+    "vulkan-sdk-win32-x64": {
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.341.1/windows/vulkansdk-windows-X64-1.4.341.1.exe",
+      "file": "vulkansdk-windows-X64-1.4.341.1.exe",
+      "sha256": "bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe",
+      "version": "1.4.341.1"
+    }
+  }
+}

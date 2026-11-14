@@ -1,0 +1,426 @@
+{
+  "models": [
+    {
+      "id": "parakeet-tdt-0.6b-v3-int8",
+      "kind": "stt",
+      "label": "Parakeet v3",
+      "engine": "sherpa",
+      "family": "transducer",
+      "dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+      "files": {
+        "encoder": "encoder.int8.onnx",
+        "decoder": "decoder.int8.onnx",
+        "joiner": "joiner.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "options": {
+        "model_type": "nemo_transducer"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+          "sha256": "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
+          "size": 487211443,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "dolphin-small-int8",
+      "kind": "stt",
+      "label": "Dolphin small",
+      "engine": "sherpa",
+      "family": "dolphin",
+      "dir": "sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02.tar.bz2",
+          "sha256": "7346b00ffe42396fff5c96d11892f0d4d72ac11418d47c5a8ada2b0f6ac8d27b",
+          "size": 191534345,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "dolphin-base-int8",
+      "kind": "stt",
+      "label": "Dolphin base",
+      "engine": "sherpa",
+      "family": "dolphin",
+      "dir": "sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02.tar.bz2",
+          "sha256": "6f23da2303c3c2e5fa6445c450fa2a7133cd57e3da070ae5f97ab9e0dfbb4a54",
+          "size": 80671385,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "omnilingual-300m-v2-int8",
+      "kind": "stt",
+      "label": "Omnilingual ASR 300M",
+      "engine": "sherpa",
+      "family": "omnilingual",
+      "dir": "sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-v2-int8-2026-02-05",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-v2-int8-2026-02-05.tar.bz2",
+          "sha256": "951b32409aade32bd525310bb39e9666773ba3fc611a39e817f620936d76c631",
+          "size": 292313120,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "omnilingual-1b-v2-int8",
+      "kind": "stt",
+      "label": "Omnilingual ASR 1B",
+      "engine": "sherpa",
+      "family": "omnilingual",
+      "dir": "sherpa-onnx-omnilingual-asr-1600-languages-1B-ctc-v2-int8-2026-02-05",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-omnilingual-asr-1600-languages-1B-ctc-v2-int8-2026-02-05.tar.bz2",
+          "sha256": "f4deae6e6cbf4ca785b89eaa3836156581208bf977ea2e6d7ae84d7efcfc3a40",
+          "size": 787296506,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-en",
+      "kind": "stt",
+      "label": "Moonshine base (en)",
+      "languages": [
+        "en"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-en-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-quantized-2026-02-27.tar.bz2",
+          "sha256": "43232c1d13013d37317163baec3135bd771a186a4356f28c889bab453bb0e891",
+          "size": 111266225,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-tiny-en",
+      "kind": "stt",
+      "label": "Moonshine tiny (en)",
+      "languages": [
+        "en"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27.tar.bz2",
+          "sha256": "9ec31b342d8fa3240c3b81b8f82e1cf7e3ac467c93ca5a999b741d5887164f8d",
+          "size": 29858559,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-es",
+      "kind": "stt",
+      "label": "Moonshine base (es)",
+      "languages": [
+        "es"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-es-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-es-quantized-2026-02-27.tar.bz2",
+          "sha256": "850c3dcc5dfccc8b1feb10bb221b11d6039b6f5c626241729f46863771016383",
+          "size": 50846902,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-ar",
+      "kind": "stt",
+      "label": "Moonshine base (ar)",
+      "languages": [
+        "ar"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-ar-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-ar-quantized-2026-02-27.tar.bz2",
+          "sha256": "4d3f16fe354d8536d3323d3eaf4c12fafb1976b5dc0a12862ab25934da94285b",
+          "size": 119143068,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-ja",
+      "kind": "stt",
+      "label": "Moonshine base (ja)",
+      "languages": [
+        "ja"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-ja-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-ja-quantized-2026-02-27.tar.bz2",
+          "sha256": "c66eb87d229a52d43bbe3b7c52a1d23f6208c0fd7c2e81802ecbda83b192798a",
+          "size": 104162109,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-uk",
+      "kind": "stt",
+      "label": "Moonshine base (uk)",
+      "languages": [
+        "uk"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-uk-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-uk-quantized-2026-02-27.tar.bz2",
+          "sha256": "d8489b159afabf4cfb734002ae8a5361781ff8a381fa18d284d32d1eeb1c0376",
+          "size": 111037143,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-vi",
+      "kind": "stt",
+      "label": "Moonshine base (vi)",
+      "languages": [
+        "vi"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-vi-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-vi-quantized-2026-02-27.tar.bz2",
+          "sha256": "97b53f5fb75a2a9dd6327440a34f45fc06c927ed2fa7217e5ebe54058e269416",
+          "size": 106719129,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-base-zh",
+      "kind": "stt",
+      "label": "Moonshine base (zh)",
+      "languages": [
+        "zh"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-base-zh-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-zh-quantized-2026-02-27.tar.bz2",
+          "sha256": "6495d4240f66bcdd2bbbbfefaa687c463150d467854001270934e88940b733c1",
+          "size": 99905420,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "moonshine-tiny-ko",
+      "kind": "stt",
+      "label": "Moonshine tiny (ko)",
+      "languages": [
+        "ko"
+      ],
+      "engine": "sherpa",
+      "family": "moonshine",
+      "dir": "sherpa-onnx-moonshine-tiny-ko-quantized-2026-02-27",
+      "files": {
+        "encoder": "encoder_model.ort",
+        "merged_decoder": "decoder_model_merged.ort",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-ko-quantized-2026-02-27.tar.bz2",
+          "sha256": "d3b6c5390a7859c9ef20ff4f20b0766fcbad1dc06c0f509fe4840a3a302112dc",
+          "size": 49153415,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "mms-tha",
+      "kind": "tts",
+      "label": "MMS Thai",
+      "languages": [
+        "th"
+      ],
+      "engine": "sherpa",
+      "family": "vits",
+      "dir": "vits-mms-tha",
+      "files": {
+        "model": "model.onnx",
+        "tokens": "tokens.txt"
+      },
+      "voices": [
+        {
+          "id": "mms-tha",
+          "label": "MMS Thai",
+          "language": "th",
+          "gender": "male",
+          "sid": 0,
+          "featured": true
+        }
+      ],
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mms-tha.tar.bz2",
+          "sha256": "e774f69a873806d5be445f107e72c9b3bd828188e1d5002f8ece8886d5528fa5",
+          "size": 107763751,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "coqui-bn",
+      "kind": "tts",
+      "label": "Coqui Bengali",
+      "languages": [
+        "bn"
+      ],
+      "engine": "sherpa",
+      "family": "vits",
+      "dir": "vits-coqui-bn-custom_female",
+      "files": {
+        "model": "model.onnx",
+        "tokens": "tokens.txt"
+      },
+      "voices": [
+        {
+          "id": "coqui-bn",
+          "label": "Coqui Bengali",
+          "language": "bn",
+          "gender": "female",
+          "sid": 0,
+          "featured": true
+        }
+      ],
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-coqui-bn-custom_female.tar.bz2",
+          "sha256": "a03292d7da03650e892bb1989b40dc2c62574c0d6c34c8bef185fbb3151417a1",
+          "size": 108053596,
+          "unpack": "tar.bz2"
+        }
+      ]
+    },
+    {
+      "id": "vits-yue",
+      "kind": "tts",
+      "label": "Cantonese VITS",
+      "languages": [
+        "yue"
+      ],
+      "engine": "sherpa",
+      "family": "vits",
+      "dir": "vits-cantonese-hf-xiaomaiiwn",
+      "files": {
+        "model": "vits-cantonese-hf-xiaomaiiwn.onnx",
+        "tokens": "tokens.txt",
+        "lexicon": "lexicon.txt",
+        "rule_fsts": "rule.fst"
+      },
+      "voices": [
+        {
+          "id": "vits-yue",
+          "label": "Cantonese VITS",
+          "language": "yue",
+          "gender": "female",
+          "sid": 0,
+          "featured": true
+        }
+      ],
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-cantonese-hf-xiaomaiiwn.tar.bz2",
+          "sha256": "bf3013cd4be34f531b7e514e708d835584dd60c9ad6eaf467ac1402005c04e46",
+          "size": 107995442,
+          "unpack": "tar.bz2"
+        }
+      ]
+    }
+  ]
+}

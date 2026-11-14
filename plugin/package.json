@@ -1,0 +1,44 @@
+{
+  "name": "paseo-voice-kit",
+  "version": "0.1.0",
+  "files": [
+    "LICENSE",
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "OVERVIEW.*.md",
+    "index.client.tsx",
+    "index.server.ts",
+    "client/",
+    "server/",
+    "shared/",
+    "assets/",
+    "MODEL_LICENSES.md",
+    "licenses/",
+    "npm-shrinkwrap.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.15.4",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^22.20.5",
+    "@types/react": "~19.2.0",
+    "esbuild": "0.25.12",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
+  },
+  "description": "Local speech recognition and voices for Paseo, with automatic fallback to built-in speech.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swordfeng/paseo-voice-kit.git",
+    "directory": "plugin"
+  },
+  "homepage": "https://github.com/swordfeng/paseo-voice-kit#readme",
+  "dependencies": {
+    "@getpaseo/client": "0.15.4"
+  }
+}

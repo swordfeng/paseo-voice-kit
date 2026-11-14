@@ -1,0 +1,521 @@
+{
+  "models": [
+    {
+      "id": "whisper-large-v3-turbo-q5_0",
+      "kind": "stt",
+      "label": "Whisper turbo",
+      "description": "About 100 languages, with punctuation. The most accurate choice for most languages. Needs a GPU to be fast.",
+      "languages": ["en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue"],
+      "tier": "recommended",
+      "uses": ["dictation", "voice_input"],
+      "engine": "whisper",
+      "files": {
+        "model": "ggml-large-v3-turbo-q5_0.bin"
+      },
+      "download": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+          "size": 574041195
+        }
+      ],
+      "coreml": {
+        "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-encoder.mlmodelc.zip",
+        "sha256": "84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a",
+        "size": 1173393014,
+        "unpack": "zip"
+      },
+      "eval": {
+        "metric": "wer",
+        "errors": {"ar": 9.0, "bn": 113.5, "ca": 14.6, "de": 3.2, "el": 11.9, "en": 5.2, "es": 2.8, "fa": 19.5, "fr": 9.3, "he": 27.2, "hi": 29.3, "id": 6.7, "it": 1.9, "ja": 4.6, "ko": 4.3, "ms": 10.4, "ne": 101.4, "nl": 9.2, "pl": 6.6, "pt": 3.4, "ru": 5.2, "sv": 10.8, "sw": 29.9, "ta": 76.2, "th": 12.9, "tl": 12.4, "tr": 8.6, "uk": 8.2, "ur": 62.5, "vi": 7.8, "yue": 14.1, "zh": 8.3},
+        "ms": 768
+      }
+    },
+    {
+      "id": "qwen3-asr-0.6b-int8",
+      "kind": "stt",
+      "label": "Qwen3-ASR",
+      "description": "30 languages on the CPU, with punctuation, and it uses your vocabulary. A good choice for Thai and Cantonese; weak for Polish, Swedish, Greek and Persian.",
+      "languages": ["zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru", "th", "vi", "ja", "tr", "hi", "nl", "sv", "da", "fi", "cs", "hu", "mk", "ro", "pl", "el", "fa", "ms", "tl"],
+      "tier": "recommended",
+      "uses": ["dictation", "voice_input"],
+      "engine": "sherpa",
+      "family": "qwen3_asr",
+      "dir": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+      "files": {
+        "conv_frontend": "conv_frontend.onnx",
+        "encoder": "encoder.int8.onnx",
+        "decoder": "decoder.int8.onnx",
+        "tokenizer": "tokenizer"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+          "sha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+          "size": 878702423,
+          "unpack": "tar.bz2"
+        }
+      ],
+      "eval": {
+        "metric": "wer",
+        "errors": {"ar": 22.3, "de": 17.7, "el": 67.2, "en": 6.2, "es": 6.2, "fa": 72.8, "fr": 15.9, "hi": 32.8, "id": 12.1, "it": 8.6, "ja": 9.3, "ko": 4.8, "ms": 35.0, "nl": 18.8, "pl": 47.1, "pt": 9.8, "ru": 15.3, "sv": 44.8, "th": 9.2, "tl": 47.0, "tr": 28.3, "vi": 11.3, "yue": 5.8, "zh": 9.3},
+        "ms": 1428
+      }
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3-int8",
+      "kind": "stt",
+      "label": "Parakeet v3",
+      "description": "25 European languages on the CPU, with punctuation. Fast, and the most accurate CPU choice for these languages.",
+      "languages": ["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"],
+      "tier": "recommended",
+      "uses": ["dictation", "voice_input"],
+      "engine": "sherpa",
+      "family": "transducer",
+      "dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+      "files": {
+        "encoder": "encoder.int8.onnx",
+        "decoder": "decoder.int8.onnx",
+        "joiner": "joiner.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "options": {
+        "model_type": "nemo_transducer",
+        "paseo_model": "parakeet-tdt-0.6b-v3-int8"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+          "sha256": "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
+          "size": 487211443,
+          "unpack": "tar.bz2"
+        }
+      ],
+      "eval": {
+        "metric": "wer",
+        "errors": {"de": 5.0, "el": 42.8, "en": 4.9, "es": 3.7, "fr": 10.7, "it": 3.0, "nl": 14.5, "pl": 11.5, "pt": 4.1, "ru": 9.1, "sv": 25.7, "uk": 10.2},
+        "ms": 507
+      }
+    },
+    {
+      "id": "whisper-small-q5_1",
+      "kind": "stt",
+      "label": "Whisper small",
+      "description": "Whisper's languages without needing a fast GPU, but less accurate than turbo. Use it when the CPU models don't cover your language.",
+      "languages": ["en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue"],
+      "uses": ["dictation", "voice_input"],
+      "engine": "whisper",
+      "files": {
+        "model": "ggml-small-q5_1.bin"
+      },
+      "download": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+          "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+          "size": 190085487
+        }
+      ],
+      "eval": {
+        "metric": "wer",
+        "errors": {"ar": 22.9, "bn": 129.9, "ca": 36.4, "de": 8.2, "el": 35.2, "en": 6.8, "es": 5.6, "fa": 50.9, "fr": 16.6, "he": 43.2, "hi": 63.8, "id": 13.8, "it": 6.9, "ja": 13.1, "ko": 5.3, "ms": 24.6, "ne": 122.9, "nl": 23.7, "pl": 18.0, "pt": 6.8, "ru": 10.1, "sv": 28.0, "sw": 79.3, "ta": 82.4, "th": 23.6, "tl": 31.2, "tr": 17.6, "uk": 14.9, "ur": 82.5, "vi": 21.8, "yue": 28.2, "zh": 21.0},
+        "ms": 296
+      }
+    },
+    {
+      "id": "dolphin-small-int8",
+      "kind": "stt",
+      "label": "Dolphin small",
+      "description": "14 Asian and Middle Eastern languages on the CPU. The best choice for Bengali, Nepali and Tamil, though it still makes many mistakes. No English or other European languages; usually no punctuation.",
+      "languages": ["zh", "ja", "ko", "th", "vi", "id", "ar", "fa", "hi", "bn", "ne", "ta", "ur", "yue"],
+      "tier": "more",
+      "uses": ["dictation", "voice_input"],
+      "engine": "sherpa",
+      "family": "dolphin",
+      "dir": "sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02.tar.bz2",
+          "sha256": "7346b00ffe42396fff5c96d11892f0d4d72ac11418d47c5a8ada2b0f6ac8d27b",
+          "size": 191534345,
+          "unpack": "tar.bz2"
+        }
+      ],
+      "eval": {
+        "metric": "wer",
+        "errors": {"ar": 18.7, "bn": 29.6, "fa": 25.3, "hi": 49.6, "id": 14.8, "ja": 8.1, "ko": 10.3, "ne": 44.8, "ta": 59.8, "th": 13.5, "ur": 73.2, "vi": 13.8, "yue": 17.3, "zh": 14.1},
+        "ms": 324
+      }
+    },
+    {
+      "id": "sensevoice-int8",
+      "kind": "stt",
+      "label": "SenseVoice",
+      "description": "Very fast on the CPU. Fine for Mandarin, but poor for English, Cantonese, Japanese and Korean.",
+      "languages": ["zh", "en", "ja", "ko", "yue"],
+      "tier": "more",
+      "uses": ["voice_input", "dictation"],
+      "engine": "sherpa",
+      "family": "sense_voice",
+      "dir": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+      "files": {
+        "model": "model.int8.onnx",
+        "tokens": "tokens.txt"
+      },
+      "options": {
+        "use_itn": true,
+        "paseo_model": "sense-voice-int8"
+      },
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2",
+          "sha256": "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63",
+          "size": 165783878,
+          "unpack": "tar.bz2"
+        }
+      ],
+      "eval": {
+        "metric": "wer",
+        "errors": {"en": 31.7, "ja": 78.6, "ko": 80.5, "yue": 36.6, "zh": 12.3},
+        "ms": 224
+      }
+    },
+    {
+      "id": "whisper-base-q5_1",
+      "kind": "stt",
+      "label": "Whisper base (language detection)",
+      "description": "Detects which language you're speaking for the larger Whisper models. Not used for transcription.",
+      "languages": ["en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue"],
+      "uses": [],
+      "engine": "whisper",
+      "files": {
+        "model": "ggml-base-q5_1.bin"
+      },
+      "download": [
+        {
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+          "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+          "size": 59707625
+        }
+      ],
+      "tier": "internal",
+      "eval": {
+        "metric": "wer",
+        "errors": {"ar": 39.4, "bn": 111.6, "ca": 51.2, "de": 19.6, "el": 64.2, "en": 22.5, "es": 9.6, "fa": 81.6, "fr": 32.2, "he": 70.0, "hi": 102.0, "id": 35.0, "it": 22.4, "ja": 23.3, "ko": 13.4, "ms": 51.5, "ne": 140.5, "nl": 49.3, "pl": 45.1, "pt": 18.3, "ru": 19.9, "sv": 53.0, "sw": 96.6, "ta": 98.8, "th": 45.1, "tl": 44.5, "tr": 32.4, "uk": 42.7, "ur": 78.3, "vi": 41.4, "yue": 42.5, "zh": 33.5},
+        "ms": 148
+      }
+    },
+    {
+      "id": "supertonic-3",
+      "kind": "tts",
+      "label": "Supertonic 3",
+      "tier": "recommended",
+      "description": "31 languages, fast on the CPU. 5 female and 5 male voices. Vietnamese is often hard to understand.",
+      "languages": ["en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi"],
+      "uses": ["voice_output"],
+      "engine": "sherpa",
+      "family": "supertonic",
+      "dir": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+      "files": {
+        "duration_predictor": "duration_predictor.int8.onnx",
+        "text_encoder": "text_encoder.int8.onnx",
+        "vector_estimator": "vector_estimator.int8.onnx",
+        "vocoder": "vocoder.int8.onnx",
+        "tts_json": "tts.json",
+        "unicode_indexer": "unicode_indexer.bin",
+        "voice_style": "voice.bin"
+      },
+      "voices": [
+        {
+          "id": "F1",
+          "label": "Female 1",
+          "language": "multi",
+          "gender": "female",
+          "sid": 0,
+          "featured": true
+        },
+        {
+          "id": "F2",
+          "label": "Female 2",
+          "language": "multi",
+          "gender": "female",
+          "sid": 1,
+          "featured": true
+        },
+        {
+          "id": "F3",
+          "label": "Female 3",
+          "language": "multi",
+          "gender": "female",
+          "sid": 2,
+          "featured": false
+        },
+        {
+          "id": "F4",
+          "label": "Female 4",
+          "language": "multi",
+          "gender": "female",
+          "sid": 3,
+          "featured": false
+        },
+        {
+          "id": "F5",
+          "label": "Female 5",
+          "language": "multi",
+          "gender": "female",
+          "sid": 4,
+          "featured": false
+        },
+        {
+          "id": "M1",
+          "label": "Male 1",
+          "language": "multi",
+          "gender": "male",
+          "sid": 5,
+          "featured": true
+        },
+        {
+          "id": "M2",
+          "label": "Male 2",
+          "language": "multi",
+          "gender": "male",
+          "sid": 6,
+          "featured": true
+        },
+        {
+          "id": "M3",
+          "label": "Male 3",
+          "language": "multi",
+          "gender": "male",
+          "sid": 7,
+          "featured": false
+        },
+        {
+          "id": "M4",
+          "label": "Male 4",
+          "language": "multi",
+          "gender": "male",
+          "sid": 8,
+          "featured": false
+        },
+        {
+          "id": "M5",
+          "label": "Male 5",
+          "language": "multi",
+          "gender": "male",
+          "sid": 9,
+          "featured": false
+        }
+      ],
+      "default_voice": "F1",
+      "download": [
+        {
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2",
+          "sha256": "82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427",
+          "size": 128774318,
+          "unpack": "tar.bz2"
+        }
+      ],
+      "eval": {
+        "metric": "roundtrip",
+        "errors": {"ar": 8.5, "de": 0.3, "el": 3.0, "en": 2.0, "es": 0.5, "fr": 1.4, "hi": 6.5, "id": 0.4, "it": 0.2, "ja": 2.4, "ko": 2.1, "nl": 1.1, "pl": 2.9, "pt": 1.5, "ru": 0.0, "sv": 5.2, "tr": 1.9, "uk": 3.6, "vi": 29.6},
+        "rtf": 0.135
+      }
+    },
+    {
+      "id": "qwen3-tts-0.6b-gguf-q4",
+      "kind": "tts",
+      "label": "Qwen3-TTS 0.6B",
+      "description": "Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish and Italian, with 9 voices; each voice can speak all of them. Two voices speak Chinese in Beijing or Sichuan dialect. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon; other computers are untested.",
+      "languages": ["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
+      "tier": "recommended",
+      "uses": ["voice_output"],
+      "engine": "gguf",
+      "family": "qwen3_tts",
+      "dir": "Qwen3-TTS-0.6B-CustomVoice-GGUF-Q4",
+      "files": {
+        "model": "qwen-talker-0.6b-customvoice-Q4_K_M.gguf",
+        "codec": "qwen-tokenizer-12hz-Q4_K_M.gguf"
+      },
+      "voices": [
+        {
+          "id": "vivian",
+          "label": "Vivian (Chinese, female)",
+          "language": "zh",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "serena",
+          "label": "Serena (Chinese, female)",
+          "language": "zh",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "uncle_fu",
+          "label": "Uncle Fu (Chinese, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "dylan",
+          "label": "Dylan (Beijing dialect, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": false
+        },
+        {
+          "id": "eric",
+          "label": "Eric (Sichuan dialect, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": false
+        },
+        {
+          "id": "ryan",
+          "label": "Ryan (English, male)",
+          "language": "en",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "aiden",
+          "label": "Aiden (English, male)",
+          "language": "en",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "ono_anna",
+          "label": "Ono Anna (Japanese, female)",
+          "language": "ja",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "sohee",
+          "label": "Sohee (Korean, female)",
+          "language": "ko",
+          "gender": "female",
+          "featured": true
+        }
+      ],
+      "default_voice": "vivian",
+      "download": [
+        {
+          "url": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-talker-0.6b-customvoice-Q4_K_M.gguf",
+          "sha256": "b3a7e6613d80f8a703c06267fc1e94d48ce91932ab82ab6e31c50f4ca4868e1e",
+          "size": 604878080,
+          "file": "qwen-talker-0.6b-customvoice-Q4_K_M.gguf"
+        },
+        {
+          "url": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-tokenizer-12hz-Q4_K_M.gguf",
+          "sha256": "cf3788b4d50aaa665fb6e57c170396aae03a3555fea52d2b5d0cda902d658039",
+          "size": 254974752,
+          "file": "qwen-tokenizer-12hz-Q4_K_M.gguf"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-tts-1.7b-gguf-q8",
+      "kind": "tts",
+      "label": "Qwen3-TTS 1.7B",
+      "description": "The larger Qwen3-TTS model: the same 10 languages and 9 voices, with a bigger download. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon; other computers are untested.",
+      "languages": ["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
+      "tier": "recommended",
+      "uses": ["voice_output"],
+      "engine": "gguf",
+      "family": "qwen3_tts",
+      "dir": "Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8",
+      "files": {
+        "model": "qwen-talker-1.7b-customvoice-Q8_0.gguf",
+        "codec": "qwen-tokenizer-12hz-Q8_0.gguf"
+      },
+      "voices": [
+        {
+          "id": "vivian",
+          "label": "Vivian (Chinese, female)",
+          "language": "zh",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "serena",
+          "label": "Serena (Chinese, female)",
+          "language": "zh",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "uncle_fu",
+          "label": "Uncle Fu (Chinese, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "dylan",
+          "label": "Dylan (Beijing dialect, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": false
+        },
+        {
+          "id": "eric",
+          "label": "Eric (Sichuan dialect, male)",
+          "language": "zh",
+          "gender": "male",
+          "featured": false
+        },
+        {
+          "id": "ryan",
+          "label": "Ryan (English, male)",
+          "language": "en",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "aiden",
+          "label": "Aiden (English, male)",
+          "language": "en",
+          "gender": "male",
+          "featured": true
+        },
+        {
+          "id": "ono_anna",
+          "label": "Ono Anna (Japanese, female)",
+          "language": "ja",
+          "gender": "female",
+          "featured": true
+        },
+        {
+          "id": "sohee",
+          "label": "Sohee (Korean, female)",
+          "language": "ko",
+          "gender": "female",
+          "featured": true
+        }
+      ],
+      "default_voice": "vivian",
+      "download": [
+        {
+          "url": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-talker-1.7b-customvoice-Q8_0.gguf",
+          "sha256": "cab2cff67a0a557310febe558dc83076b28ed790e491867eb2751759f4cd89fa",
+          "size": 2042834304,
+          "file": "qwen-talker-1.7b-customvoice-Q8_0.gguf"
+        },
+        {
+          "url": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-tokenizer-12hz-Q8_0.gguf",
+          "sha256": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94",
+          "size": 291150624,
+          "file": "qwen-tokenizer-12hz-Q8_0.gguf"
+        }
+      ]
+    }
+  ]
+}

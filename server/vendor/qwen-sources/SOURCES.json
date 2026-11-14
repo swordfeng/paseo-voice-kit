@@ -1,0 +1,4 @@
+{
+  "qwentts.tar.gz": {"repository":"https://github.com/ServeurpersoCom/qwentts.cpp","revision":"f1a6924789883bd92eeb59176793a94af55730b3","sha256":"1950f4eba02dda1277e78c3b41308cf7c5f952e4d52f146c910d7be2a4b7a10a","license":"MIT"},
+  "ggml.tar.gz": {"repository":"https://github.com/ServeurpersoCom/ggml","revision":"0d403add5cb6329935290f02462e1072045aacd2","sha256":"a030d08758f914d5dcf5b0dd1edb7484158127cc0ca7cb6a3acb69b326c89927","license":"MIT"}
+}
