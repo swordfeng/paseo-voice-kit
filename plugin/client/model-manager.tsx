@@ -1,12 +1,14 @@
 // The Models tab: every model as a card with its state and actions, grouped by kind.
 import type { PluginTheme } from "@getpaseo/plugin";
-import { ExternalLink, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
+import { ExternalLink, SettingsInput, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { MODEL_LICENSES } from "../shared/model-licenses";
 import type { Model, RouteVoices, Status } from "../shared/rpc";
 import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, effectiveApproximateLanguages, type CustomModel, type Preferences } from "../shared/settings";
 import { LanguagePicker } from "./custom-model-form";
+import { MlxRuntimeSetup } from "./mlx-runtime";
+import type { WriteResult } from "./settings-writer";
 import { formatBytes, percent } from "./format";
 import { DEVICE_NAMES, appleSilicon, joinList, languageName, languageOptionLabel, modelDescription, modelLabel, useText, usedByLabel, type Translate } from "./i18n";
 import { coverage, isVisibleVoiceModel, move, nativeLanguages } from "./voice-chain";
@@ -75,6 +77,8 @@ export interface ModelManagerProps {
   pull(id: string): void;
   remove(id: string): void;
   removeCustom(id: string): void;
+  /** Saves a settings change and reports whether Paseo accepted it. */
+  saveSettings(patch: Partial<Preferences>): Promise<WriteResult>;
   onAdd(): void;
   /** Restart the speech server, which also reloads custom models. */
   restart(): void;
@@ -139,6 +143,7 @@ export function ModelManager(props: ModelManagerProps) {
 function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomModel; actions?: ReactNode; extra?: ReactNode; highlight?: boolean; enabled?: boolean; order?: number }) {
   const { theme, model: m, models, status, values, compact, busy } = props;
   const { t, locale } = useText();
+  const [editing, setEditing] = useState(false);
   const c = theme.colors;
   const dl = status?.downloads[m.id] ?? m.download ?? null;
   const downloading = !!dl && !dl.error && dl.phase !== "done";
@@ -237,8 +242,12 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{m.paseoInUse ? t("models.paseoInUse") : t("models.removesForPaseo")}</Text>
       ) : null}
 
+      {m.engine === "mlx" && m.tier === "custom" ? <MlxRuntimeSetup theme={theme} /> : null}
+      {editing && props.custom ? <CustomEditor {...props} model={m} custom={props.custom} onDone={() => setEditing(false)} /> : null}
+
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: compact ? "flex-start" : "flex-end" }}>
         {props.actions}
+        {props.custom && !editing ? <Button theme={theme} label={t("models.edit")} disabled={busy} onPress={() => setEditing(true)} /> : null}
         {uses
           .filter((u) => chosen(u) !== m.id)
           .map((u) => (
@@ -480,6 +489,56 @@ function CoverageDetails(props: ModelManagerProps & { enabled: Model[]; cov: Ret
           </View>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Renaming one of your models and changing its languages. Only the name and languages change; its
+ * id, source, files, pins, keys and place in the voice list stay as they are. Qwen3-TTS speaks its
+ * fixed 10 languages, so they aren't editable.
+ */
+function CustomEditor(props: ModelManagerProps & { model: Model; custom: CustomModel; onDone(): void }) {
+  const { theme, custom, values } = props;
+  const { t } = useText();
+  const c = theme.colors;
+  const fixed = MLX_FAMILY_VALUES.has(custom.family ?? "") || custom.family === GGUF_QWEN_FAMILY;
+  const [label, setLabel] = useState(custom.label);
+  const [languages, setLanguages] = useState<string[] | undefined>(custom.languages);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = label.trim();
+  // A voice model must keep at least one language to be used; for speech recognition an empty
+  // list means no limit.
+  const noLanguages = custom.kind === "tts" && !fixed && languages !== undefined && languages.length === 0;
+  const submit = async () => {
+    if (!name || noLanguages || saving) return;
+    setSaving(true);
+    setError(null);
+    const next = values.customModels.map((x) => (x.id === custom.id ? { ...x, label: name, ...(fixed || languages === undefined ? {} : { languages }) } : x));
+    const result = await props.saveSettings({ customModels: next });
+    setSaving(false);
+    if (result.ok) props.onDone();
+    else setError(result.reason ?? "");
+  };
+  return (
+    <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 8 }}>
+      <SettingsInput label={t("form.name")} initialValue={custom.label} onChangeText={setLabel} />
+      {fixed ? (
+        <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("models.languagesFixed")}</Text>
+      ) : (
+        <LanguagePicker theme={theme} value={languages ?? []} onChange={setLanguages} hint={custom.kind === "stt" ? t("models.languagesSttHint") : undefined} />
+      )}
+      {noLanguages ? <Text style={{ color: c.statusWarning, fontSize: 12 }}>{t("voiceModels.needsLanguages")}</Text> : null}
+      {error !== null ? (
+        <Text selectable style={{ color: c.statusDanger, fontSize: 12 }}>
+          {error ? t("models.editFailed") + " " + error : t("models.editFailed")}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        <Button theme={theme} label={t("models.editSave")} disabled={saving || !name || noLanguages} onPress={() => void submit()} />
+        <Button theme={theme} label={t("models.editCancel")} disabled={saving} onPress={props.onDone} />
+      </View>
     </View>
   );
 }

@@ -414,6 +414,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
       removeCustom={removeCustom}
       onAdd={() => setAdding(kind)}
       restart={() => action.mutate(() => restart({}))}
+      saveSettings={saveNow}
       routes={routes}
       kind={kind}
     />

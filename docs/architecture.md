@@ -106,7 +106,10 @@ listening port. The Python comes from
 `scripts/install-qwen-runtime.sh`, shipped in native releases as
 `qwen-runtime/install-qwen-runtime.sh`; it needs Apple Silicon, macOS 14 or later and
 Python 3.12, and installs `qwen-build-requirements.txt` and then `qwen-requirements.txt`,
-both locked with SHA-256 hashes). Voice Kit never deletes model files it reads from
+both locked with SHA-256 hashes). The settings page can run the same installation after
+the user confirms (`voicekit.mlx.status` and `voicekit.mlx.install`); it needs an existing
+Python 3.12, installs only Python packages, and is never started by adding a model or by a
+speech request. Voice Kit never deletes model files it reads from
 outside its own and Paseo's shared model folders. MLX Qwen3-TTS models are added as custom
 models from Hugging Face or a local folder (engine `mlx`, family `qwen3_tts`). Only
 CustomVoice models with the 9 preset voices are supported; Base and VoiceDesign models aren't.

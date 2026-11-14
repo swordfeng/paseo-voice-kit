@@ -73,15 +73,23 @@ the plugin with `node scripts/rpc.mjs voicekit.status`.
 
 ### MLX voice models (optional, Apple Silicon)
 
-The built-in Qwen3-TTS models are GGUF files that run in Voice Kit's own native worker; they
-need no Python. Qwen3-TTS models you add for MLX run in a separate Python environment with
-MLX, which needs a Mac with Apple Silicon, macOS 14 or later and Python 3.12. Voice Kit
-doesn't install Python packages by itself: set it up once with
-`scripts/install-qwen-runtime.sh` (native releases include it as
-`qwen-runtime/install-qwen-runtime.sh`; `VOICEKIT_SETUP_PYTHON` picks the Python 3.12 to
-use). It installs from two SHA-256-locked requirement files, the build tools first and
-then the runtime, into Voice Kit's plugin data. You can also point `VOICEKIT_MLX_PYTHON` at
-an existing compatible Python. Qwen3-TTS voices speak at normal speed; the Speed setting applies to the
+Only Qwen3-TTS models you add for MLX use Python. The built-in voices (Supertonic 3 and the
+GGUF Qwen3-TTS models) run in Voice Kit's own native programs and need none. MLX models run
+in a separate Python environment with MLX, which needs a Mac with Apple Silicon, macOS 14 or
+later and Python 3.12 already installed.
+
+Voice Kit installs that environment only when you ask. When you add an MLX model, and on its
+card until the environment exists, "Install MLX runtime…" explains what it will do and asks
+first. It uses your Python 3.12 (`VOICEKIT_SETUP_PYTHON` on the daemon picks a specific one)
+and installs mlx, mlx-audio and their dependencies from PyPI, from two SHA-256-locked
+requirement files (build tools first, then the runtime), into Voice Kit's plugin data. It
+doesn't install Python itself. Model weights are separate: an enabled MLX model downloads
+them as usual, following "Download models automatically". Adding a model never installs the
+environment.
+
+You can also run `scripts/install-qwen-runtime.sh` yourself (native releases include it as
+`qwen-runtime/install-qwen-runtime.sh`), or point `VOICEKIT_MLX_PYTHON` at an existing
+compatible Python; Voice Kit then leaves that Python alone. Qwen3-TTS voices speak at normal speed; the Speed setting applies to the
 other voices.
 
 On Linux and Windows, `dev-install.sh` builds with Vulkan support by default, which
