@@ -1,5 +1,60 @@
 # Speech model evaluation
 
+## Windows Vulkan 0.6B Q4 compatibility check
+
+Native Windows 11 x64, Ryzen 5950X, RTX 5090, NVIDIA 616.56, 2026-11-14.
+The 0.1.1 candidate at `55d84e20c2913bc8858468686d0d396f7d1f3a1f`
+used qwentts.cpp `f1a6924789883bd92eeb59176793a94af55730b3` and ggml
+`0d403add5cb6329935290f02462e1072045aacd2`.
+
+Whisper base and Qwen TTS 1.7B Q8 generated correct speech using Vulkan.
+Qwen TTS 0.6B Q4 loaded on Vulkan but exhausted all 1200 frames rather than
+ending normally: 2,304,000 samples at 24 kHz, exactly 96 seconds of rejected
+audio. The worker's existing error combines empty and token-limited audio;
+the sample-count diagnostic establishes that this case was token exhaustion.
+
+Single-variable tests kept the original package, model, input and seed:
+
+| Vulkan setting | Chinese short sentence |
+|---|---|
+| Default | HTTP 503, token limit reached |
+| Disable coopmat2 | Same failure, 18.562s inference wall time |
+| Disable F16 | Same failure, 24.032s inference wall time |
+| Disable MMVQ | Correct 2.640s speech, 0.907s inference wall time |
+
+This isolates the failing MMVQ execution/activation-conversion path, without
+proving a particular shader defect or FP16 overflow. Talker prefill taps and
+the first three talker logits were finite in an instrumented control; those
+taps do not inspect the code predictor's direct graph. The MMVQ path converts
+F32 activation vectors to Q8_1; disabling it retains float-vector matvec on
+Vulkan. Flash attention remains enabled.
+
+The compatibility workaround is confined to Windows Qwen workers requesting a
+GPU, when talker GGUF metadata identifies a 1024-wide Qwen3-TTS model containing
+Q4_K tensors. It is set before backend initialization and does not use filename
+matching. Explicit disable/force environment variables are preserved using
+ggml's presence-based semantics. The current 1.7B Q8 model is not matched.
+This is a bounded workaround verified on this host, not a general kernel fix.
+
+The final native regression (`scripts/smoke-real-models.py --accelerator auto
+--expect-gpu --large-qwen --no-downloads`, with explicit model/output paths)
+completed in 17.74s. Actual device metadata and native logs confirmed Vulkan
+for Whisper and both Qwen GGUF models. Both Qwen models passed English/Chinese
+ASR content read-back and byte-identical repeated fixed-seed Chinese output.
+The 0.6B Chinese audio was 2.640s at speed 1 and 2.112s at speed 1.25; 1.7B was
+2.000s and 1.608s. These are short correctness checks, not benchmark rankings.
+Each inference was bounded at 60 seconds and the full run at 300 seconds.
+CPU regression retained the original 0.6B WAV output. No microphone or human
+playback assessment was performed.
+
+The candidate's sherpa runtime separately reports only CPUExecutionProvider
+and falls back to CPU for explicit CUDA/DirectML requests. Those models are
+not counted as GPU successes; this worker workaround does not add ONNX GPU
+providers. Complete host-specific logs and samples remain in the independent
+Windows validation directory rather than the repository or model-selection UI.
+
+## Mac multilingual evaluation
+
 Measured on Apple M6, 2026-11-13. FLEURS test split pinned to revision
 `70bb2e84b976b7e960aa89f1c648e09c59f894dd`: 15 distinct sentences per language,
 32 languages, 480 recordings. Exact sentences, clip names, durations and original
