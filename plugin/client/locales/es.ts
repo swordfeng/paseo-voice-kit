@@ -129,6 +129,8 @@ export const es: Messages = {
     showAllHint: "Si no, solo se muestran algunas favoritas.",
     speed: "Velocidad",
     speedQwen: "Qwen3-TTS cambia la velocidad después de generar la voz, sin cambiar el tono. La generación en sí no se acelera.",
+    speedQwenOld: "Esta versión del servidor de voz no puede cambiar la velocidad de Qwen3-TTS; las demás voces siguen este ajuste.",
+    speedQwenOldOnly: "Esta versión del servidor de voz no puede cambiar la velocidad de Qwen3-TTS.",
     preview: "Escuchar",
     previewHint: "Escucha la voz seleccionada.",
     play: "Reproducir",

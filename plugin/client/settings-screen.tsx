@@ -281,6 +281,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     if (id) inUse[SITE_USE[site]] = id;
   }
   const chain = values.ttsModels;
+  const qwenSpeed = atLeast(st?.binary.version, [0, 1, 1]);
   const experimentalOpen = experimental ?? values.neuralEngine;
   // Neural Engine setup state of the Whisper model in use for listening, if any.
   const whisperInUse = [values.dictationModel || st?.defaultSttModel, values.voiceInputModel || st?.defaultSttModel]
@@ -356,10 +357,16 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   // Qwen3-TTS has no speed control: say so where its voices are used.
   const speedHint = () => {
     const enabled = chain.map((id) => byId.get(id)).filter((m): m is Model => !!m);
-    // Qwen3-TTS follows Speed too, by changing the generated audio's tempo (keeping its pitch).
-    const qwen = enabled.some((m) => m.family === "qwen3_tts" || m.family === GGUF_QWEN_FAMILY);
-    return qwen ? t("speaking.speedQwen") : undefined;
+    // Speech servers from 0.1.1 change Qwen3-TTS's tempo after generating (keeping its pitch);
+    // older ones read it at normal speed.
+    const qwen = enabled.filter(isQwen);
+    if (qwen.length === 0) return undefined;
+    if (qwenSpeed) return t("speaking.speedQwen");
+    return qwen.length === enabled.length ? t("speaking.speedQwenOldOnly") : t("speaking.speedQwenOld");
   };
+  // Nothing to change when every enabled voice is Qwen3-TTS on a server that can't change its speed.
+  const enabledVoices = chain.map((id) => byId.get(id)).filter((m): m is Model => !!m);
+  const speedUnavailable = !qwenSpeed && enabledVoices.length > 0 && enabledVoices.every(isQwen);
   // The last reply Voice Kit couldn't read, and which models could help.
   const ttsError = (() => {
     const e = st?.ttsLastError;
@@ -555,6 +562,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
             <SettingsSelect
               label={t("speaking.speed")}
               hint={speedHint()}
+              disabled={speedUnavailable}
               value={String(values.speed)}
               options={SPEEDS}
               onValueChange={(v) => update({ speed: Number(v) })}
@@ -716,6 +724,20 @@ function downloadSummary(t: Translate, status: Status | undefined, labelOf: (id:
   }
   if (Object.values(status?.coreml ?? {}).some((c) => c?.state === "compiling")) return t("status.neuralSetup");
   return null;
+}
+
+/** A Qwen3-TTS model (GGUF or MLX), whose speed is changed after generating. */
+function isQwen(m: Model): boolean {
+  return m.family === "qwen3_tts" || m.family === GGUF_QWEN_FAMILY;
+}
+
+/** Whether a version string ("0.1.1", "0.1.1-dev") is at least `min`. Unknown counts as no. */
+function atLeast(version: string | null | undefined, min: number[]): boolean {
+  const parts = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  if (!parts) return false;
+  const v = parts.slice(1, 4).map(Number);
+  for (let i = 0; i < 3; i++) if (v[i] !== min[i]) return v[i] > min[i];
+  return true;
 }
 
 /** What the voices RPC depends on in the settings: the ordered list and your own voice models. */

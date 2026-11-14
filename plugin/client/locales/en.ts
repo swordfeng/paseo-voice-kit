@@ -131,6 +131,8 @@ export const en = {
     showAllHint: "Otherwise only a few favourites are listed.",
     speed: "Speed",
     speedQwen: "Qwen3-TTS changes speed after the speech is generated, keeping its pitch. Generating it doesn't get faster.",
+    speedQwenOld: "This speech server version can't change Qwen3-TTS's speed; the other voices follow this setting.",
+    speedQwenOldOnly: "This speech server version can't change Qwen3-TTS's speed.",
     preview: "Preview",
     previewHint: "Hear the selected voice.",
     play: "Play",
