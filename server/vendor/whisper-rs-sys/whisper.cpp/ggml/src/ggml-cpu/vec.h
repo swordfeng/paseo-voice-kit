@@ -219,8 +219,9 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
             svfloat16_t hx_1 = svld1_f16(pg, (const __fp16 *)(x[1] + np2));
             svfloat16_t hy = svld1_f16(pg, (const __fp16 *)(y + np2));
 
-            sum_00 = svmad_f16_x(pg, hx_0, hy, sum_00);
-            sum_10 = svmad_f16_x(pg, hx_1, hy, sum_10);
+            // [voicekit patch] Preserve prior sums in inactive tail lanes.
+            sum_00 = svmla_f16_m(pg, sum_00, hx_0, hy);
+            sum_10 = svmla_f16_m(pg, sum_10, hx_1, hy);
         }
         GGML_F16x_VEC_REDUCE(sumf[0], sum_00, sum_01, sum_02, sum_03);
         GGML_F16x_VEC_REDUCE(sumf[1], sum_10, sum_11, sum_12, sum_13);

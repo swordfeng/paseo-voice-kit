@@ -80,7 +80,8 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
             svbool_t pg = svwhilelt_b32(np2, n);
             ax1 = svld1_f32(pg, x + np2);
             ay1 = svld1_f32(pg, y + np2);
-            sum1 = svmad_f32_m(pg, ax1, ay1, sum1);
+            // [voicekit patch] Preserve accumulated lanes outside the tail predicate.
+            sum1 = svmla_f32_m(pg, sum1, ax1, ay1);
         }
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);
@@ -314,7 +315,8 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
             svfloat16_t hx = svld1_f16(pg, (const __fp16 *)(x + np2));
             svfloat16_t hy = svld1_f16(pg, (const __fp16 *)(y + np2));
 
-            sum1 = svmad_f16_x(pg, hx, hy, sum1);
+            // [voicekit patch] Inactive lanes still contribute to the final reduction.
+            sum1 = svmla_f16_m(pg, sum1, hx, hy);
         }
         GGML_F16x_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4);
     #elif defined(__riscv_v_intrinsic)

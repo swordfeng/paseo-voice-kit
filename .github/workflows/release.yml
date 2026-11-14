@@ -223,6 +223,10 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' localhost:48600/v1/models)
           test "$code" = "401"
           kill %1 || true
+      - name: Check ARM SVE dot-product tails
+        if: matrix.key == 'linux-arm64'
+        shell: bash
+        run: python3 scripts/test-sve-dots.py "$(dirname "$EXE")" --require-sve
       - name: Real model CPU inference and round trips
         id: real-models
         timeout-minutes: 12

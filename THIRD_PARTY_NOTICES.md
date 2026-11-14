@@ -16,7 +16,8 @@ code, downloaded models and evaluation data keep their upstream licenses.
 | ONNX Runtime, included in the sherpa native libraries | MIT | [Upstream](https://github.com/microsoft/onnxruntime), [license and copyright notice](licenses/onnxruntime-MIT.txt) |
 
 The vendored `server/vendor/whisper-rs-sys` adds the `backend-dl` build mode;
-Voice Kit's changes in `build.rs` are marked `[voicekit patch]`. The upstream
+Voice Kit's changes in `build.rs` and the SVE dot-product tail fixes in
+`ggml/src/ggml-cpu/vec.cpp` and `vec.h` are marked `[voicekit patch]`. The upstream
 whisper.cpp license remains in that directory too.
 
 Other Rust dependencies are pinned in `server/Cargo.lock`; plugin development
