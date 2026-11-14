@@ -41,6 +41,19 @@ assert.equal((await retry.status()).phase, "failed"); assert.match((await retry.
 await retry.install(true);
 for (let n = 0; n < 30 && (await retry.status()).phase === "installing"; n++) await new Promise(r => setTimeout(r, 1));
 assert.equal((await retry.status()).phase, "ready"); await retry.dispose();
+const invalid = new MlxRuntimeInstaller({ ...empty, exists: async p => !p.endsWith("python"),
+  check: async (_python, runtime) => { if (runtime) throw new Error("MLX import failed"); return "/python3.12"; }, run: async () => {},
+});
+await invalid.install(true);
+for (let n = 0; n < 30 && (await invalid.status()).phase === "installing"; n++) await new Promise(r => setTimeout(r, 1));
+assert.equal((await invalid.status()).phase, "failed", "a successful shell exit alone cannot mark a broken runtime ready"); await invalid.dispose();
+let releaseCheck!: () => void;
+const prerequisite = new Promise<void>(resolve => { releaseCheck = resolve; });
+const stopping = new MlxRuntimeInstaller({ ...empty, exists: async () => false,
+  check: async () => { await prerequisite; return "/python3.12"; }, run: async () => { assert.fail("must not install after cleanup"); },
+});
+const late = stopping.install(true);
+await stopping.dispose(); releaseCheck(); await assert.rejects(late, /stopping/);
 
 // Real process lifecycle, using only scratch shell scripts; never pip/network/model downloads.
 if (process.platform !== "win32") {
