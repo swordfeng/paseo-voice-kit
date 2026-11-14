@@ -113,8 +113,11 @@ speech request. Voice Kit never deletes model files it reads from
 outside its own and Paseo's shared model folders. MLX Qwen3-TTS models are added as custom
 models from Hugging Face or a local folder (engine `mlx`, family `qwen3_tts`). Only
 CustomVoice models with the 9 preset voices are supported; Base and VoiceDesign models aren't.
-Requests never install packages. Qwen3-TTS has no speed control upstream, so its voices
-speak at normal speed; the Speed setting applies to the other models.
+Requests never install packages. Qwen3-TTS has no speed control upstream, so
+Voice Kit changes the tempo of its generated audio afterwards, keeping the pitch (native
+processing built into the speech server, with nothing extra to install); a speed of 1 leaves
+the audio as generated. This doesn't
+shorten synthesis. Other models apply the speed natively.
 
 Personas (`options.personas` of the chain) pair similar voices across the enabled models.
 Supertonic's voices were chosen by speaker-embedding similarity (3D-Speaker CAM++,

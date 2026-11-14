@@ -356,9 +356,9 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   // Qwen3-TTS has no speed control: say so where its voices are used.
   const speedHint = () => {
     const enabled = chain.map((id) => byId.get(id)).filter((m): m is Model => !!m);
-    const qwen = enabled.filter((m) => m.family === "qwen3_tts");
-    if (qwen.length === 0) return undefined;
-    return qwen.length === enabled.length ? t("speaking.speedQwen") : t("speaking.speedMixed");
+    // Qwen3-TTS follows Speed too, by changing the generated audio's tempo (keeping its pitch).
+    const qwen = enabled.some((m) => m.family === "qwen3_tts" || m.family === GGUF_QWEN_FAMILY);
+    return qwen ? t("speaking.speedQwen") : undefined;
   };
   // The last reply Voice Kit couldn't read, and which models could help.
   const ttsError = (() => {

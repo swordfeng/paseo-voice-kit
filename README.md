@@ -89,8 +89,11 @@ environment.
 
 You can also run `scripts/install-qwen-runtime.sh` yourself (native releases include it as
 `qwen-runtime/install-qwen-runtime.sh`), or point `VOICEKIT_MLX_PYTHON` at an existing
-compatible Python; Voice Kit then leaves that Python alone. Qwen3-TTS voices speak at normal speed; the Speed setting applies to the
-other voices.
+compatible Python; Voice Kit then leaves that Python alone.
+
+Qwen3-TTS voices (GGUF and MLX) follow the Speed setting too: Voice Kit changes the speed of
+the generated speech afterwards, keeping its pitch, so the wait for generation stays the same.
+Other voices set their speed while generating.
 
 On Linux and Windows, `dev-install.sh` builds with Vulkan support by default, which
 needs Vulkan headers and `glslc`. For a CPU-only build, use
