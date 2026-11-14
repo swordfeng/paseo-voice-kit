@@ -31,6 +31,8 @@ pub struct SherpaStt {
     accelerator: String,
     /// SenseVoice and Paraformer write English in capitals.
     tidy_caps: bool,
+    /// Qwen3-ASR can return its `language <Name><asr_text>` header with the transcript.
+    qwen3_asr: bool,
 }
 
 impl SherpaStt {
@@ -84,7 +86,12 @@ impl SherpaStt {
         mc.provider = Some(provider_name(provider));
         let recognizer = OfflineRecognizer::create(&config)
             .ok_or_else(|| anyhow::anyhow!("sherpa-onnx could not load {} ({family}) from {}", entry.id, inst.root.display()))?;
-        Ok(Self { recognizer, accelerator: provider_name(provider), tidy_caps: matches!(family, "sense_voice" | "paraformer") })
+        Ok(Self {
+            recognizer,
+            accelerator: provider_name(provider),
+            tidy_caps: matches!(family, "sense_voice" | "paraformer"),
+            qwen3_asr: family == "qwen3_asr",
+        })
     }
 }
 
@@ -95,6 +102,9 @@ impl SttEngine for SherpaStt {
         self.recognizer.decode(&stream);
         let result = stream.get_result().ok_or_else(|| anyhow::anyhow!("no recognition result"))?;
         let text = result.text.trim();
+        if self.qwen3_asr {
+            return Ok(qwen3_asr_transcript(text));
+        }
         Ok(if self.tidy_caps { tidy_caps(text) } else { text.to_string() })
     }
 
@@ -259,6 +269,35 @@ impl TtsEngine for SherpaTts {
     }
 }
 
+/// Qwen3-ASR decodes `language <Name><asr_text><transcript>`, and `language None<asr_text>`
+/// for audio without speech (Qwen3-ASR technical report; Hugging Face transformers
+/// `processing_qwen3_asr._parse_single_output`). Like that parser, keep only the text after the
+/// first marker, but only when what precedes it is such a header: `language …` or a single
+/// label word. Anything else is left as recognized, so a transcript that merely mentions the
+/// marker is not cut. Trailing end-of-turn control tokens are removed.
+pub fn qwen3_asr_transcript(text: &str) -> String {
+    const MARKER: &str = "<asr_text>";
+    const END_TOKENS: &[&str] = &["<|im_end|>", "<|endoftext|>"];
+    fn strip_end(mut text: &str) -> &str {
+        loop {
+            let trimmed = text.trim_end();
+            match END_TOKENS.iter().find(|t| trimmed.ends_with(*t)) {
+                Some(token) => text = &trimmed[..trimmed.len() - token.len()],
+                None => return trimmed.trim_start(),
+            }
+        }
+    }
+    let text = text.trim();
+    let Some((prefix, rest)) = text.split_once(MARKER) else {
+        return strip_end(text).to_string();
+    };
+    let prefix = prefix.trim();
+    let header = prefix.is_empty()
+        || prefix.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("language "))
+        || prefix.chars().all(char::is_alphabetic);
+    if header { strip_end(rest).to_string() } else { strip_end(text).to_string() }
+}
+
 /// SenseVoice emits English in ALL CAPS ("HELLO AND THAT'S IT"). When all English letters are
 /// capitals, lower-case words, keep "I", and capitalize sentence starts. Normally cased text
 /// (acronyms included) and Chinese pass through unchanged.
@@ -307,7 +346,33 @@ pub fn tidy_caps(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{tidy_caps, speech_language};
+    use super::{qwen3_asr_transcript, tidy_caps, speech_language};
+
+    #[test]
+    fn qwen3_asr_header_is_removed_but_transcripts_are_kept() {
+        // Plain transcripts and ordinary words pass through untouched.
+        for plain in ["Hello, this is a speech test.", "你好，这是一个语音测试。", "language matters here", "Utterance one, utterance two."] {
+            assert_eq!(qwen3_asr_transcript(plain), plain);
+        }
+        // The official header, in any language, and a stray single-word label.
+        assert_eq!(qwen3_asr_transcript("language English<asr_text>Hello, this is a speech test."), "Hello, this is a speech test.");
+        assert_eq!(qwen3_asr_transcript("language Chinese<asr_text>你好，这是一个语音测试。"), "你好，这是一个语音测试。");
+        assert_eq!(qwen3_asr_transcript("utterance<asr_text>Hello there"), "Hello there");
+        assert_eq!(qwen3_asr_transcript("<asr_text>Bonjour"), "Bonjour");
+        assert_eq!(qwen3_asr_transcript("  language English\n<asr_text> Hi.  "), "Hi.");
+        // No speech, and end-of-turn control tokens.
+        assert_eq!(qwen3_asr_transcript("language None<asr_text><|im_end|>"), "");
+        assert_eq!(qwen3_asr_transcript("language English<asr_text>Done.<|im_end|>"), "Done.");
+        assert_eq!(qwen3_asr_transcript("Done. <|im_end|><|endoftext|>"), "Done.");
+        // Only the first marker counts; a later one is part of the transcript.
+        assert_eq!(qwen3_asr_transcript("language English<asr_text>type <asr_text> literally"), "type <asr_text> literally");
+        // A transcript that merely mentions the marker is not cut.
+        for mention in ["please write <asr_text> here", "the tag <asr_text> marks text"] {
+            assert_eq!(qwen3_asr_transcript(mention), mention);
+        }
+        // Control-token text inside a sentence is not a suffix and stays.
+        assert_eq!(qwen3_asr_transcript("say <|im_end|> twice"), "say <|im_end|> twice");
+    }
 
     #[test]
     fn unsupported_speech_language_falls_back_without_changing_recognition() {
