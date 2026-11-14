@@ -2425,6 +2425,7 @@ dependencies = [
  "whatlang",
  "whisper-rs",
  "whisper-rs-sys",
+ "wsola",
  "zip 2.6.1",
 ]
 
@@ -2673,6 +2674,15 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "wsola"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8149cd82a73bbde439d2b42a40a032de7dc28b1ec01919fcd0bd0456ecea75e6"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "xattr"

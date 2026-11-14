@@ -159,7 +159,9 @@ impl TtsEngine for MlxTts {
             self.failures.fetch_add(1, Ordering::SeqCst);
             *self.failure.lock().unwrap() = Some((format!("{error:#}"), Instant::now()));
         } else { self.failures.store(0, Ordering::SeqCst); self.failure.lock().unwrap().take(); }
-        result
+        drop(worker);
+        let pcm = result?;
+        if req.speed == 1.0 { Ok(pcm) } else { timings.time("tempo", || pcm.with_tempo(req.speed)) }
     }
     fn voices(&self) -> Vec<Voice> { self.voices.clone() }
     fn accelerator(&self) -> &str { if self.running.load(Ordering::SeqCst) { "metal" } else { "idle" } }

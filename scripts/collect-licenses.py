@@ -45,6 +45,9 @@ for package in sorted(json.loads(metadata.read_text(encoding='utf-8'))['packages
         shutil.copytree(source, covered, ignore=shutil.ignore_patterns('.cargo-ok', 'target', '.git'))
     elif not files and name == 'whatlang':
         shutil.copy2(project / 'licenses/whatlang-MIT.txt', destination / 'LICENSE')
+    elif not files and name == 'wsola' and version == '0.3.0' and license_id == 'MIT':
+        shutil.copy2(project / 'licenses/wsola-MIT.txt', destination / 'LICENSE-MIT.txt')
+        shutil.copy2(source / 'Cargo.toml.orig', destination / 'Cargo.toml.orig')
     elif not files:
         missing.append(name + '-' + version)
     url = package.get('repository') or f'https://crates.io/crates/{name}/{version}'

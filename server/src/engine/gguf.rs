@@ -357,7 +357,9 @@ impl TtsEngine for GgufTts {
             self.failures.store(0, Ordering::SeqCst);
             self.failure.lock().unwrap().take();
         }
-        result
+        drop(worker);
+        let pcm = result?;
+        if req.speed == 1.0 { Ok(pcm) } else { timings.time("tempo", || pcm.with_tempo(req.speed)) }
     }
     fn voices(&self) -> Vec<Voice> {
         self.voices.clone()

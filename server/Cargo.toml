@@ -28,6 +28,7 @@ whisper-rs-sys = "0.15"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 whatlang = "0.16"
 libc = "0.2"
+wsola = { version = "=0.3.0", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }

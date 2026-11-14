@@ -170,3 +170,38 @@ A separate three-request smoke check confirmed Whisper turbo's actual `metal`
 accelerator on English, Mandarin and Spanish: 735, 717 and 743 ms. The multilingual
 English/Spanish voice reply synthesized in 587 ms. These checks used a temporary
 server and existing model files, with no downloads or live-server changes.
+
+## Qwen tempo and sampling smoke check (2026-11-14)
+
+Apple Silicon M6, existing Qwen3-TTS 0.6B CustomVoice GGUF Q4 weights, Serena,
+explicit Chinese, with the native worker reporting Metal. The input was
+“你好，我们用同一个声音，平静地读完这句话。” No model downloads were needed.
+
+WSOLA 0.3.0 is compiled into the server for GGUF and MLX output only. A speed of
+1 bypasses it and retains the exact original PCM allocation. Synthetic tone
+checks covered 0.5, 0.8, 1.2, 1.5 and 2: sample rate stayed at 24 kHz, the
+220 Hz test tone stayed within 5 Hz, duration stayed within an 80 ms boundary
+tolerance, and the final sound survived. Silence, tiny fragments and invalid
+parameters were checked separately.
+
+One existing speech sample was processed without rerunning the model:
+
+| Speed | Audio duration | Processing time |
+| --- | --- | --- |
+| 1 | 4.240 s | bypass |
+| 0.8 | 5.300 s | 32.3 ms |
+| 1.25 | 3.392 s | 20.4 ms |
+
+These are single local spot checks, not cross-platform performance promises.
+Changing tempo does not reduce model generation time. The sped-up and slowed
+samples both transcribed to the complete original words with the already-running
+Whisper recognizer; this is a content smoke check, not a listening-quality score.
+
+For sampling, the worker passed `speaker=serena` and `language=chinese` throughout.
+Main-talker temperatures 0.9 and 0.7 with seed 42, and 0.7 with seed 43, all
+produced the original words when transcribed. Repeating 0.7/42 after the other
+requests produced byte-identical PCM. The GGUF worker now uses main-talker
+temperature 0.7 and seed 42 by default; the acoustic sub-talker keeps its upstream
+settings. MLX sampling is unchanged. Deterministic repeats do not establish that
+speaker identity stays equally stable across different texts or languages; that
+still needs listening evaluation.
