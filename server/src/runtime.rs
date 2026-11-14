@@ -885,6 +885,9 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // Windows inherits the listener's nonblocking mode on accept.
+                        // The fixture's request/response I/O is deliberately blocking.
+                        socket.set_nonblocking(false).unwrap();
                         socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
                         let mut data = [0u8; 4096];
                         let _ = socket.read(&mut data).unwrap();
