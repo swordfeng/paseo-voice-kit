@@ -362,7 +362,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     const qwen = enabled.filter(isQwen);
     if (qwen.length === 0) return undefined;
     if (qwenSpeed) return t("speaking.speedQwen");
-    return qwen.length === enabled.length ? t("speaking.speedQwenOldOnly") : t("speaking.speedQwenOld");
+    return qwen.length === enabled.length ? t("speaking.speedQwenUnavailable") : t("speaking.speedQwenUnavailableMixed");
   };
   // Nothing to change when every enabled voice is Qwen3-TTS on a server that can't change its speed.
   const enabledVoices = chain.map((id) => byId.get(id)).filter((m): m is Model => !!m);
