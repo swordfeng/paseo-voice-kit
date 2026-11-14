@@ -90,8 +90,9 @@ afterwards.
 
 ## Releases
 
-No release has been published yet: `plugin/shared/release.ts` has no assets, so every
-platform currently needs a local build or the Binary path setting.
+v0.1.0 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0).
+`plugin/shared/release.ts` pins each platform's archive URL and SHA-256; a local build
+(`dev-install.sh`) or the Binary path setting takes precedence over it.
 
 The release workflow (`.github/workflows/release.yml`) builds darwin-arm64, darwin-x64,
 linux-x64, linux-arm64 and win32-x64 with `GGML_NATIVE=OFF`, so binaries don't depend on
@@ -103,13 +104,19 @@ SHA-256, unpacks it into `plugin-data/voice-kit/bin/<version>/` and runs the exe
 named in the manifest.
 
 CI on Linux takes Vulkan headers, loader and `glslc` from conda-forge and builds with clang
-and Ninja; Windows uses the LunarG SDK. CI checks that the Linux executable has no
-`libvulkan` dependency and runs a stub-server smoke test from each unpacked asset.
+and Ninja; Windows uses the LunarG SDK. On every platform CI runs the native tests
+(`cargo test`), unpacks the archive the way the plugin does
+(`scripts/verify-native-package.mjs`) and runs a smoke test from the unpacked asset:
+`--version`, `devices`, and the HTTP server with stub engines (health, a speech request,
+and a request without the token being refused). It also checks that the Linux executable
+has no `libvulkan` dependency and that Windows needs no unpackaged Visual C++ runtime.
+All five platforms passed for v0.1.0.
 
-What has been tested: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu
-22.04, clang 14), including tests, real Whisper transcription with and without a Vulkan
-loader, and lavapipe. Linux x64 builds the same way under emulation and runs `devices` and
-a Whisper encoder pass. Windows and real GPUs on Linux or Windows are untested.
+Tested beyond CI: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu 22.04,
+clang 14), including real Whisper transcription with and without a Vulkan loader, and
+lavapipe; Linux x64 the same way under emulation, running `devices` and a Whisper encoder
+pass. Not verified yet: real inference on Windows, Intel Macs and Linux or Windows GPUs;
+the Paseo app in right-to-left languages; and a fresh install end to end.
 
 To publish, push a `v*` tag. CI builds every platform's asset and publishes them with
 `SHA256SUMS`. Then pin them for the plugin:
@@ -118,12 +125,11 @@ To publish, push a `v*` tag. CI builds every platform's asset and publishes them
 node scripts/release-manifest.mjs v0.1.0
 ```
 
-## Before the first public release
+## Packaging a local build
 
-The release target is `swordfeng/paseo-voice-kit`. The repository and native
-assets are not published yet. CI uses supported macOS 15 ARM and Intel runners,
-asserts the architecture, and builds the Linux/Windows variants. Every platform
-ships a `.tar.gz` archive with its executable and license notices; Linux and
+Releases are published from `swordfeng/paseo-voice-kit`. CI uses supported macOS 15 ARM
+and Intel runners, asserts the architecture, and builds the Linux/Windows variants. Every
+platform ships a `.tar.gz` archive with its executable and license notices; Linux and
 Windows also include the ggml backend libraries.
 
 Before packaging a local build, collect the notices from its Cargo metadata:
@@ -137,7 +143,7 @@ VOICEKIT_NOTICES=/tmp/voicekit-notices bash scripts/package-release.sh darwin-ar
 Use a new notices/output directory each time. Notice collection includes the
 Rust dependency inventory, upstream native notices and unmodified MPL-covered
 crate sources. `scripts/release-manifest.mjs` pins the published assets after a
-successful release; keep `RELEASE.assets` empty until real assets exist.
+successful release.
 
 The first managed runtime download requires an affirmative installation choice.
 Already-installed, custom and local development binaries need no additional

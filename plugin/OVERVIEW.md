@@ -8,11 +8,11 @@ If you change a voice setting yourself in Settings > Voice, Voice Kit stops mana
 
 ## Setup
 
-The speech server is a separate native program. No prebuilt servers have been published yet, so for now you build it from the source repository or point the Binary path setting at your own build. Once a prebuilt server is available for your platform, Voice Kit asks before downloading it and shows where it comes from. Declining turns Voice Kit off and leaves Paseo's built-in speech in place.
+The speech server is a separate native program. Prebuilt servers for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the project's v0.1.0 release on GitHub. The first time Voice Kit starts, it asks before downloading the one for your platform, shows where it comes from and checks it against a pinned checksum. Declining turns Voice Kit off and leaves Paseo's built-in speech in place. You can also point the Binary path setting at your own build; installation and build instructions are in the [README](https://github.com/swordfeng/paseo-voice-kit#readme).
 
 The built-in Qwen3-TTS models run in Voice Kit's own native worker. Qwen3-TTS models you add for MLX need a Mac with Apple Silicon, macOS 14 or later and a Python 3.12 runtime with MLX, installed separately with the setup script in the source repository; Voice Kit never installs Python packages on its own.
 
-Requires Paseo 0.15.4 or later with plugins enabled. Daily use so far is on macOS with Apple Silicon. Linux has been tested only in containers, and Windows, Intel Macs and Linux GPUs are untested.
+Requires Paseo 0.15.4 or later with plugins enabled. Daily use so far is on macOS with Apple Silicon. On every release platform, automated tests build the server, run its native tests, unpack the archive as Voice Kit does and check the speech server with stand-in engines. Real speech on Windows, Intel Macs and Linux GPUs has not been verified yet.
 
 ## Models
 

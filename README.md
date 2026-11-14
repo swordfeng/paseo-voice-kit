@@ -31,13 +31,35 @@ If Voice Kit isn't ready, Paseo uses its built-in speech instead.
 
 Measured accuracy and speed are in [docs/eval.md](docs/eval.md).
 
-## Install (local build)
+## Install
 
-No prebuilt `voicekit` releases have been published yet, so build it from source.
-You need Paseo 0.15.4 or later with plugins enabled, Node.js with npm, a Rust
-toolchain, CMake and a C/C++ compiler (Xcode Command Line Tools on macOS).
+You need Paseo 0.15.4 or later with plugins enabled. Install the plugin from this
+repository's `plugin/` directory (the default branch):
 
-From a checkout of this repository:
+```bash
+paseo plugin add git:swordfeng/paseo-voice-kit:plugin
+```
+
+You can also paste `git:swordfeng/paseo-voice-kit:plugin` into Settings > Plugins >
+Plugin source. Voice Kit isn't in the Paseo plugin registry or on npm.
+
+The speech server (`voicekit`) is a separate native program. Prebuilt servers for macOS
+(Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the
+[v0.1.0 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0). The
+first time Voice Kit starts, it asks before downloading the one for your platform and
+shows where it comes from. The download is checked against a SHA-256 pinned in the plugin,
+then unpacked into `~/.paseo/plugin-data/voice-kit/bin/`. If you decline, Voice Kit turns
+off and Paseo keeps its built-in speech.
+
+Speech models are separate downloads of about 100 MB to 2 GB each, checked against pinned
+checksums. They download when you choose a model, unless you turn off "Download models
+automatically", and keep their own licenses (see [License](#license)).
+
+### Build from source
+
+To build the server yourself, you also need Node.js with npm, a Rust toolchain, CMake and
+a C/C++ compiler (Xcode Command Line Tools on macOS). A local build is used instead of the
+downloaded server and needs no confirmation. From a checkout of this repository:
 
 ```bash
 scripts/dev-install.sh                    # build voicekit, install to ~/.paseo/plugin-data/voice-kit/bin/local
@@ -73,10 +95,14 @@ needs Vulkan headers and `glslc`. For a CPU-only build, use
   The other speech models (sherpa-onnx) run on the CPU; requesting Core ML for
   them currently falls back to the CPU. The optional Neural Engine mode for Whisper
   is off by default.
-- **Linux** builds and runs in Docker on Apple Silicon (arm64 natively, x64 under
-  emulation), including Whisper on a software Vulkan driver. It hasn't been tested
-  on real Linux GPUs.
-- **Windows** and **Intel Macs** are in the release build workflow but untested.
+- **Release builds** for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and
+  Windows (x64) pass CI on each platform: the native tests, unpacking the archive the way
+  the plugin does, and a smoke test of the server's HTTP interface with stub engines.
+- **Linux** also runs real Whisper transcription in Docker on Apple Silicon (arm64
+  natively, x64 under emulation), including on a software Vulkan driver.
+- **Not verified yet**: real speech recognition and voices on Windows, Intel Macs and
+  Linux GPUs; the Paseo app in right-to-left languages; and a fresh install from start to
+  finish.
 
 ## Everyday settings
 
