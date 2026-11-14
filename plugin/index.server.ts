@@ -138,8 +138,9 @@ export default function contribute(server: PluginServerContext) {
     binary: () => supervisor.state.binary?.path ?? null,
     installed: () => {
       // Drop any failed-worker cooldown by reapplying the current settings, without changing them.
+      const revision = prefsRevision;
       if (!stopped) void settings.read().then(current => {
-        if (!stopped && current.status === "ready") return applyPrefs(current.values, true);
+        if (!stopped && revision === prefsRevision && current.status === "ready") return applyPrefs(current.values, true);
       }).catch(error => supervisor.note(`[voice-kit] MLX setup completed; speech server refresh failed: ${String(error)}`));
     },
   });
