@@ -223,7 +223,6 @@ export const ja: Messages = {
       downloading: "Neural Engine 用ファイルをダウンロード中（1.2 GB）…",
       compiling: "この Mac 用に設定中（初回のみ）… {{seconds}} 秒",
       failed: "Neural Engine の設定に失敗しました。",
-      off: "約 2.5 倍速くなります。1.2 GB のダウンロードと、数分かかる初回設定が必要です。",
     },
   },
   catalog: {
@@ -357,6 +356,10 @@ export const ja: Messages = {
       failed: "失敗",
     },
     typical: "通常 {{ms}} ms",
+    experimental: "実験的",
+    showExperimental: "実験的なオプションを表示",
+    hideExperimental: "実験的なオプションを隠す",
+    neuralHint: "Whisper だけを高速化します。初回のセットアップでは約 1.2 GB をダウンロードし、数分かかり、多くのメモリを使います。GPU のためには不要です。これがなくても Whisper は Metal を使います。",
   },
   form: {
     title: "モデルを追加",

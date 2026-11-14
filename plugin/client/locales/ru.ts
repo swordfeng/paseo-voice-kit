@@ -224,7 +224,6 @@ export const ru: Messages = {
       downloading: "Загрузка файлов для Neural Engine (1,2 ГБ)…",
       compiling: "Настройка для этого Mac (один раз)… {{seconds}} с",
       failed: "Не удалось настроить Neural Engine.",
-      off: "Примерно в 2,5 раза быстрее. Нужна загрузка 1,2 ГБ и однократная настройка на несколько минут.",
     },
   },
   catalog: {
@@ -358,6 +357,10 @@ export const ru: Messages = {
       failed: "ошибка",
     },
     typical: "обычно {{ms}} мс",
+    experimental: "Экспериментальные",
+    showExperimental: "Показать экспериментальные параметры",
+    hideExperimental: "Скрыть экспериментальные параметры",
+    neuralHint: "Ускоряет только Whisper. Первая настройка загружает около 1,2 ГБ, занимает несколько минут и много памяти. Для GPU не нужно: Whisper использует Metal и без этого.",
   },
   form: {
     title: "Добавить модель",

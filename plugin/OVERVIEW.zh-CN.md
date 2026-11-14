@@ -24,7 +24,7 @@ Voice Kit 会在守护进程旁启动一个小型原生语音服务（voicekit�
 
 模型下载到 `~/.paseo/plugin-data/voice-kit/models`，并按固定的校验和验证。除非关闭“自动下载模型”，选择模型后会立即下载。Parakeet v3 和 SenseVoice 与 Paseo 共用同一份文件：只下载一次，两边都能看到，移除时 Paseo 那边也会一起移除。下载的模型保留各自的许可证，见 MODEL_LICENSES.md；Supertonic 3 的 OpenRAIL-M 许可证包含使用限制。
 
-在 Mac 上，可以在“听”标签页中已选 Whisper 模型的卡片上打开神经网络引擎。它需要下载 1.2 GB，并进行一次耗时几分钟的设置，之后 Whisper 速度约快 2.5 倍。默认关闭。
+在 Mac 上，可以在“高级”的实验性选项中为 Whisper 打开神经网络引擎。它只加快 Whisper；没有它 Whisper 也会使用 GPU（Metal）。它需要下载 1.2 GB，并进行一次耗时几分钟的设置，之后 Whisper 速度约快 2.5 倍。默认关闭。
 
 ## 你自己的模型
 

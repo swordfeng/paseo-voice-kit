@@ -223,7 +223,6 @@ export const ptBR: Messages = {
       downloading: "Baixando os arquivos do Neural Engine (1,2 GB)…",
       compiling: "Configurando para este Mac (só uma vez)… {{seconds}} s",
       failed: "A configuração do Neural Engine falhou.",
-      off: "Cerca de 2,5 vezes mais rápido. Exige um download de 1,2 GB e uma configuração única que leva vários minutos.",
     },
   },
   catalog: {
@@ -357,6 +356,10 @@ export const ptBR: Messages = {
       failed: "falhou",
     },
     typical: "normalmente {{ms}} ms",
+    experimental: "Experimental",
+    showExperimental: "Mostrar opções experimentais",
+    hideExperimental: "Ocultar opções experimentais",
+    neuralHint: "Acelera só o Whisper. A primeira configuração baixa cerca de 1,2 GB e leva vários minutos e bastante memória. Não é necessário para a GPU: o Whisper usa Metal sem isso.",
   },
   form: {
     title: "Adicionar um modelo",

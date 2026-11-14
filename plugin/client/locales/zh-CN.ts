@@ -223,7 +223,6 @@ export const zhCN: Messages = {
       downloading: "正在下载神经网络引擎文件（1.2 GB）…",
       compiling: "正在为这台 Mac 进行设置（仅需一次）… {{seconds}} 秒",
       failed: "神经网络引擎设置失败。",
-      off: "速度约快 2.5 倍。需要下载 1.2 GB，并进行一次耗时几分钟的设置。",
     },
   },
   catalog: {
@@ -357,6 +356,10 @@ export const zhCN: Messages = {
       failed: "失败",
     },
     typical: "通常 {{ms}} 毫秒",
+    experimental: "实验性",
+    showExperimental: "显示实验性选项",
+    hideExperimental: "隐藏实验性选项",
+    neuralHint: "只加快 Whisper。首次设置需下载约 1.2 GB，并耗时几分钟、占用较多内存。使用 GPU 不需要它：没有它 Whisper 也会使用 Metal。",
   },
   form: {
     title: "添加模型",

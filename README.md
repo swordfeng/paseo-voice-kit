@@ -94,7 +94,7 @@ needs Vulkan headers and `glslc`. For a CPU-only build, use
 - **macOS on Apple Silicon** is the platform in daily use. Whisper runs on Metal.
   The other speech models (sherpa-onnx) run on the CPU; requesting Core ML for
   them currently falls back to the CPU. The optional Neural Engine mode for Whisper
-  is off by default.
+  (Advanced, experimental options) is off by default.
 - **Release builds** for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and
   Windows (x64) pass CI on each platform: the native tests, unpacking the archive the way
   the plugin does, and a smoke test of the server's HTTP interface with stub engines.
@@ -116,8 +116,9 @@ the Command Center (⌘K), or from Settings > Plugins.
   voice model list, language coverage, other voice models and your own.
 - **Advanced**: acceleration (Automatic or CPU only; CPU only skips MLX models),
   automatic model downloads, unloading idle models (each model unloads on its own after
-  10 minutes unused by default), port (47615 by default), a custom server binary and
-  the server log.
+  10 minutes unused by default), port (47615 by default), a custom server binary,
+  the server log, and collapsed experimental options: Neural Engine for Whisper on Macs
+  (off by default; Whisper uses Metal without it).
 
 The Voice Kit switch at the top turns everything on or off.
 

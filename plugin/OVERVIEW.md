@@ -24,7 +24,7 @@ The defaults work in many languages without changing anything:
 
 Models download into `~/.paseo/plugin-data/voice-kit/models` and are checked against pinned checksums. They download as soon as you choose them unless you turn off "Download models automatically". Parakeet v3 and SenseVoice share Paseo's own copies: they download once, both apps show them, and removing them removes them for Paseo too. Downloaded models keep their own licenses, listed in MODEL_LICENSES.md; Supertonic 3's OpenRAIL-M license includes use restrictions.
 
-On Macs you can turn on Neural Engine on the selected Whisper model's card in the Listening tab. It needs a 1.2 GB download and a one-time setup of several minutes, then makes Whisper about 2.5 times faster. It is off by default.
+On Macs you can turn on Neural Engine for Whisper under Advanced, in the experimental options. It speeds up Whisper only; Whisper uses the GPU (Metal) without it. It needs a 1.2 GB download and a one-time setup of several minutes, then makes Whisper about 2.5 times faster. It is off by default.
 
 ## Your own models
 

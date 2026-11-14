@@ -160,7 +160,6 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
   // A custom model whose files or config are broken: nothing to use or download until fixed.
   const broken = m.unavailable ?? null;
   const canUse = !broken && !unsupported && (m.installed || remote || values.autoDownload);
-  const coreml = m.coreml?.state;
   const description = modelDescription(t, m);
   const license = MODEL_LICENSES[m.id];
   // The server names the model that needs this one by its English label.
@@ -180,12 +179,13 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
           </Badge>
         ))}
         {isDefault ? <Badge theme={theme}>{t("models.computerDefault")}</Badge> : null}
-        {m.usedBy && !usedFor.length ? (
+        {/* "Language detection" for Whisper base; voice models show their place in the list instead. */}
+        {m.usedBy && m.kind === "stt" && !usedFor.length ? (
           <Badge theme={theme} tone="accent">
             {usedByLabel(t, m.usedBy, labelByEnglish)}
           </Badge>
         ) : null}
-        {m.tier === "recommended" && !m.usedBy && !unsupported ? (
+        {m.tier === "recommended" && !(m.kind === "stt" && m.usedBy) && !unsupported ? (
           <Badge theme={theme} tone="success">
             {t("models.recommendedBadge")}
           </Badge>
@@ -237,17 +237,6 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{m.paseoInUse ? t("models.paseoInUse") : t("models.removesForPaseo")}</Text>
       ) : null}
 
-      {m.coreml && props.coremlSupported && usedFor.length > 0 ? (
-        <View style={{ borderTopWidth: 1, borderTopColor: c.border, paddingTop: 4 }}>
-          <SettingsSwitch
-            label={t("models.neural.label")}
-            hint={neuralHint(t, coreml, m.coreml.seconds)}
-            value={values.neuralEngine}
-            onValueChange={(neuralEngine) => props.update({ neuralEngine })}
-          />
-        </View>
-      ) : null}
-
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: compact ? "flex-start" : "flex-end" }}>
         {props.actions}
         {uses
@@ -275,7 +264,8 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
   );
 }
 
-function neuralHint(t: Translate, state: string | undefined, seconds: number | undefined): string {
+/** The Neural Engine setup state, or null while it is off. */
+export function neuralHint(t: Translate, state: string | undefined, seconds: number | undefined): string | null {
   switch (state) {
     case "installed":
       return t("models.neural.installed");
@@ -286,7 +276,7 @@ function neuralHint(t: Translate, state: string | undefined, seconds: number | u
     case "failed":
       return t("models.neural.failed");
     default:
-      return t("models.neural.off");
+      return null;
   }
 }
 

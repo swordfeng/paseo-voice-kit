@@ -224,7 +224,6 @@ export const ar: Messages = {
       downloading: "جارٍ تنزيل ملفات Neural Engine (1.2 غ.ب)…",
       compiling: "جارٍ الإعداد لهذا الـ Mac (مرة واحدة)… {{seconds}} ث",
       failed: "فشل إعداد Neural Engine.",
-      off: "أسرع بنحو 2.5 مرة. يتطلب تنزيل 1.2 غ.ب وإعدادًا لمرة واحدة يستغرق عدة دقائق.",
     },
   },
   catalog: {
@@ -358,6 +357,10 @@ export const ar: Messages = {
       failed: "فشل",
     },
     typical: "عادةً {{ms}} م.ث",
+    experimental: "تجريبي",
+    showExperimental: "عرض الخيارات التجريبية",
+    hideExperimental: "إخفاء الخيارات التجريبية",
+    neuralHint: "يسرّع Whisper فقط. يُنزّل الإعداد الأول نحو 1.2 غ.ب ويستغرق عدة دقائق ويستهلك ذاكرة كثيرة. لا حاجة إليه لاستخدام GPU: يستخدم Whisper ‏Metal من دونه.",
   },
   form: {
     title: "إضافة نموذج",

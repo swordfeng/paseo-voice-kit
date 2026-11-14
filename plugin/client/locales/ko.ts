@@ -223,7 +223,6 @@ export const ko: Messages = {
       downloading: "Neural Engine 파일 다운로드 중(1.2GB)…",
       compiling: "이 Mac에 맞게 설정 중(한 번만)… {{seconds}}초",
       failed: "Neural Engine 설정에 실패했습니다.",
-      off: "약 2.5배 빠릅니다. 1.2GB 다운로드와 몇 분 걸리는 일회성 설정이 필요합니다.",
     },
   },
   catalog: {
@@ -357,6 +356,10 @@ export const ko: Messages = {
       failed: "실패",
     },
     typical: "보통 {{ms}}ms",
+    experimental: "실험적",
+    showExperimental: "실험적 옵션 보기",
+    hideExperimental: "실험적 옵션 숨기기",
+    neuralHint: "Whisper만 빨라집니다. 처음 설정할 때 약 1.2GB를 내려받고 몇 분이 걸리며 메모리를 많이 씁니다. GPU를 쓰는 데는 필요하지 않습니다. 이 옵션 없이도 Whisper는 Metal을 사용합니다.",
   },
   form: {
     title: "모델 추가",

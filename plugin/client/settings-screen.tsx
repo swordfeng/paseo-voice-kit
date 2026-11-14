@@ -13,7 +13,7 @@ import {
 } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import {
   logsRpc,
   modelsRpc,
@@ -50,7 +50,7 @@ import {
   type Translate,
 } from "./i18n";
 import { Button, Tabs } from "./kit";
-import { ModelManager } from "./model-manager";
+import { ModelManager, neuralHint } from "./model-manager";
 import { useSettingsWriter } from "./settings-writer";
 import { CHAIN_ROUTER_ID, isVisibleVoiceModel, nativeLanguages } from "./voice-chain";
 
@@ -143,6 +143,8 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const [tab, setTab] = useState<Tab>("listening");
   const [showLogs, setShowLogs] = useState(false);
   const [showAllVoices, setShowAllVoices] = useState(false);
+  // Experimental options start collapsed, or open while one of them is on.
+  const [experimental, setExperimental] = useState<boolean | null>(null);
   const [adding, setAdding] = useState<"stt" | "tts" | null>(null);
 
   const status = useQuery({ queryKey: ["voicekit", "status"], queryFn: () => getStatus({}), refetchInterval: 1500 });
@@ -164,6 +166,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     // Also while speech as a whole is unavailable, so each model's reason shows.
     enabled: running,
     staleTime: 5_000,
+    placeholderData: (previous) => previous,
     refetchInterval: (query) => {
       if (tab !== "speaking") return false;
       const cooling = query.state.data?.routes.some((r) => !!r.retryAfterSeconds);
@@ -269,6 +272,12 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     if (id) inUse[SITE_USE[site]] = id;
   }
   const chain = values.ttsModels;
+  const experimentalOpen = experimental ?? values.neuralEngine;
+  // Neural Engine setup state of the Whisper model in use for listening, if any.
+  const whisperInUse = [values.dictationModel || st?.defaultSttModel, values.voiceInputModel || st?.defaultSttModel]
+    .map((id) => byId.get(id ?? ""))
+    .find((m) => m?.coreml);
+  const neuralState = whisperInUse?.coreml ? neuralHint(t, whisperInUse.coreml.state, whisperInUse.coreml.seconds) : null;
   /** A model's name in the UI language: built-in names are translated, others shown as they are. */
   const labelOf = (id: string): string => {
     if (id === CHAIN_ROUTER_ID) return joinList(t, chain.map((c) => (c === CHAIN_ROUTER_ID ? c : labelOf(c))));
@@ -277,7 +286,12 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   };
 
   const withCurrent = (options: { label: string; value: string }[], current: string) =>
-    !current || options.some((o) => o.value === current) ? options : [{ label: labelOf(current), value: current }, ...options];
+    !current || options.some((o) => o.value === current) ? options : [{ label: voiceNameOf(current), value: current }, ...options];
+  // A saved voice not in the current list: a persona by its name, never its id.
+  const voiceNameOf = (id: string): string => {
+    const persona = PERSONA_NAMES[id];
+    return persona ? voiceLabel(t, locale, { label: persona[0] + " · " + persona[1], language: "multi", gender: persona[1] }) : id;
+  };
 
   const allVoices = voices.data?.voices ?? [];
   // With voice models enabled, voices are personas paired across the models, plus a custom choice per model.
@@ -607,6 +621,26 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
             </ScrollView>
           ) : null}
           {st ? <EngineLines t={t} status={st} textStyle={styles.muted} labelOf={labelOf} /> : null}
+
+          {models.data?.coremlSupported ? (
+            <View style={{ gap: 8 }}>
+              <Pressable accessibilityRole="button" accessibilityState={{ expanded: experimentalOpen }} onPress={() => setExperimental(!experimentalOpen)} hitSlop={6}>
+                <Text style={{ color: theme.colors.accent, fontSize: 13 }}>
+                  {experimentalOpen ? t("advanced.hideExperimental") + " ▴" : t("advanced.showExperimental") + " ▾"}
+                </Text>
+              </Pressable>
+              {experimentalOpen ? (
+                <SettingsSection title={t("advanced.experimental")}>
+                  <SettingsSwitch
+                    label={t("models.neural.label")}
+                    hint={sentences(t, t("advanced.neuralHint"), neuralState)}
+                    value={values.neuralEngine}
+                    onValueChange={(neuralEngine) => update({ neuralEngine })}
+                  />
+                </SettingsSection>
+              ) : null}
+            </View>
+          ) : null}
         </>
       ) : null}
 
@@ -628,6 +662,16 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
 }
 
 const CUSTOM = "custom";
+
+/** The six personas' names and genders, for showing a saved persona before the voices load. */
+const PERSONA_NAMES: Record<string, [string, "female" | "male"]> = {
+  "female-higher": ["Mia", "female"],
+  "female-medium": ["Lena", "female"],
+  "female-lower": ["Nora", "female"],
+  "male-higher": ["Leo", "male"],
+  "male-medium": ["Kai", "male"],
+  "male-deep": ["Owen", "male"],
+};
 
 /** "Found: Vulkan (NVIDIA GeForce RTX 3060)." or "No GPU found." */
 function deviceSummary(t: Translate, status: Status | undefined): string | null {

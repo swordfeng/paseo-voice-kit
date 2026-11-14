@@ -225,7 +225,6 @@ export const en = {
       downloading: "Downloading the Neural Engine files (1.2 GB)…",
       compiling: "Setting up for this Mac (one time)… {{seconds}} s",
       failed: "Neural Engine setup failed.",
-      off: "About 2.5× faster. Needs a 1.2 GB download and a one-time setup that takes several minutes.",
     },
   },
   // Built-in models (server/catalog.json). English must match the catalog; a check enforces it.
@@ -360,6 +359,10 @@ export const en = {
       failed: "failed",
     },
     typical: "typically {{ms}} ms",
+    experimental: "Experimental",
+    showExperimental: "Show experimental options",
+    hideExperimental: "Hide experimental options",
+    neuralHint: "Speeds up Whisper only. The first setup downloads about 1.2 GB and takes several minutes and a lot of memory. Not needed for the GPU: Whisper uses Metal without it.",
   },
   form: {
     title: "Add a model",
