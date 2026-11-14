@@ -40,7 +40,10 @@ Custom models come from extra catalog files (`--catalog`). The plugin writes one
 
 The server supports these sherpa-onnx families: speech recognition `sense_voice`,
 `paraformer`, `transducer`, `nemo_ctc`, `fire_red_asr`, `fire_red_asr_ctc`, `dolphin`,
-`moonshine`, `qwen3_asr`; voices `kokoro`, `vits`, `matcha`, `supertonic`.
+`moonshine`, `qwen3_asr`; voices `kokoro`, `vits`, `matcha`, `supertonic`. `vits` covers
+models that come with their lexicon or tokens, such as MeloTTS. Piper models need an external
+phonemizer (espeak-ng data) in sherpa-onnx 2.0, which Voice Kit doesn't set up yet, so they
+don't work.
 
 ### Files shared with Paseo
 
@@ -113,11 +116,13 @@ speech request. Voice Kit never deletes model files it reads from
 outside its own and Paseo's shared model folders. MLX Qwen3-TTS models are added as custom
 models from Hugging Face or a local folder (engine `mlx`, family `qwen3_tts`). Only
 CustomVoice models with the 9 preset voices are supported; Base and VoiceDesign models aren't.
-Requests never install packages. Qwen3-TTS has no speed control upstream, so
-Voice Kit changes the tempo of its generated audio afterwards, keeping the pitch (native
-processing built into the speech server, with nothing extra to install); a speed of 1 leaves
-the audio as generated. This doesn't
-shorten synthesis. Other models apply the speed natively.
+Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech
+server built from the current source changes the tempo of its generated audio afterwards,
+keeping the pitch (native processing built into the server, with nothing extra to install); a
+speed of 1 leaves the audio as generated. This doesn't shorten synthesis. Other models apply
+the speed natively. The GGUF worker samples the main talker with temperature 0.7 and a fixed
+seed, so the same text and voice come out the same each time. Both are in the source for 0.1.1;
+the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
 Personas (`options.personas` of the chain) pair similar voices across the enabled models.
 Supertonic's voices were chosen by speaker-embedding similarity (3D-Speaker CAM++,

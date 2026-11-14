@@ -91,6 +91,11 @@ afterwards.
 ## Releases
 
 v0.1.0 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0).
+0.1.1 (Qwen3-TTS speed and stable GGUF sampling) is being prepared and isn't published;
+`plugin/shared/release.ts` still pins 0.1.0. Its CI is planned to add speech smoke tests with
+real models on the CPU on all five platforms (Whisper base, Qwen3-ASR, Supertonic 3 and
+Qwen3-TTS 0.6B GGUF). This section will record the results once they pass; GPU inference on
+Windows and Linux stays unverified.
 `plugin/shared/release.ts` pins each platform's archive URL and SHA-256; a local build
 (`dev-install.sh`) or the Binary path setting takes precedence over it.
 

@@ -27,7 +27,8 @@ If Voice Kit isn't ready, Paseo uses its built-in speech instead.
 - **Other models.** Parakeet v3 (European languages), Dolphin small (Asian and
   Middle Eastern languages), SenseVoice and Whisper small.
   You can also add your own models from Hugging Face, a Whisper or sherpa-onnx
-  file, or another OpenAI-compatible speech server.
+  file, or another OpenAI-compatible speech server. Piper voices aren't supported yet
+  (they need a phonemizer that isn't wired up).
 
 Measured accuracy and speed are in [docs/eval.md](docs/eval.md).
 
@@ -91,9 +92,11 @@ You can also run `scripts/install-qwen-runtime.sh` yourself (native releases inc
 `qwen-runtime/install-qwen-runtime.sh`), or point `VOICEKIT_MLX_PYTHON` at an existing
 compatible Python; Voice Kit then leaves that Python alone.
 
-Qwen3-TTS voices (GGUF and MLX) follow the Speed setting too: Voice Kit changes the speed of
-the generated speech afterwards, keeping its pitch, so the wait for generation stays the same.
-Other voices set their speed while generating.
+With a speech server built from the current source, Qwen3-TTS voices (GGUF and MLX) follow the
+Speed setting too: Voice Kit changes the speed of the generated speech afterwards, keeping its
+pitch, so the wait for generation stays the same. Other voices set their speed while
+generating. The published 0.1.0 server reads Qwen3-TTS at normal speed; 0.1.1, which includes
+this, is being prepared.
 
 On Linux and Windows, `dev-install.sh` builds with Vulkan support by default, which
 needs Vulkan headers and `glslc`. For a CPU-only build, use
