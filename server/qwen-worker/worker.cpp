@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -42,6 +43,13 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (argc != 4) return 2;
+#ifdef __APPLE__
+    // Backend registration eagerly initializes Metal (and compiles its shaders),
+    // even when qt_init will select CPU. CPU-only workers must avoid that work.
+    if (std::string(argv[3]) == "cpu" && setenv("GGML_METAL_DEVICES", "0", 1) != 0) {
+        error("Could not disable Metal initialization for the CPU worker"); return 1;
+    }
+#endif
     qt_log_set([](qt_log_level level, const char *message, void *) {
         if(level>=QT_LOG_INFO)std::fprintf(stderr,"[qwen] %s\n",message);
     },nullptr);

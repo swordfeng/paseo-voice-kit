@@ -61,7 +61,7 @@ class Server:
 
     def __enter__(self):
         args = [str(self.config.exe), "serve", "--models-dir", str(self.config.models_dir),
-                "--port", "0", "--token", self.token, "--stt-model", self.recognizer,
+                "--port", "0", "--token=" + self.token, "--stt-model", self.recognizer,
                 "--tts-model", self.voice_model, "--accelerator", self.config.accelerator,
                 "--onnx-provider", "cpu", "--threads", "2", "--coreml", "false",
                 "--language", "request", "--exit-on-stdin-eof"]
@@ -77,6 +77,8 @@ class Server:
             first = queue.Queue()
             threading.Thread(target=lambda: first.put(self.process.stdout.readline()), daemon=True).start()
             line = first.get(timeout=self.remaining(20))
+            if not line:
+                raise RuntimeError(f"Native server exited before its startup handshake; see {self.phase}.log")
             hello = json.loads(line)
             if hello.get("event") != "listening":
                 raise RuntimeError("Invalid native startup handshake")
