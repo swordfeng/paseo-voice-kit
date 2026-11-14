@@ -42,7 +42,7 @@ export class MlxRuntimeInstaller {
   }
   private async check(python: string, runtime: boolean): Promise<string> {
     if (this.options.check) return this.options.check(python, runtime);
-    const result = await execCommand(python, ["-I", "-c", runtime ? CHECK : PYTHON], { shell: false, timeout: 15_000, maxBuffer: 64 * 1024 });
+    const result = await execCommand(python, ["-I", "-c", runtime ? CHECK : PYTHON], { shell: false, timeout: 15_000, maxBuffer: 64 * 1024, signal: this.lifetime.signal });
     return result.stdout.trim();
   }
   async status(force = false): Promise<MlxRuntime> {
