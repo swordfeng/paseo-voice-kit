@@ -415,6 +415,7 @@ export const en = {
     sha256Hint: "Optional. Checked after downloading.",
     cancel: "Cancel",
     add: "Add model",
+    saveFailed: "Couldn't add the model.",
     errors: {
       pressLookUp: "Enter a repository and press Look up.",
       noVoiceFiles: "No sherpa-onnx voice files found in this repository.",

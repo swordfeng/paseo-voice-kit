@@ -412,6 +412,7 @@ export const fr: Messages = {
     sha256Hint: "Facultatif. Vérifié après le téléchargement.",
     cancel: "Annuler",
     add: "Ajouter le modèle",
+    saveFailed: "Impossible d'ajouter le modèle.",
     errors: {
       pressLookUp: "Saisissez un dépôt puis appuyez sur Rechercher.",
       noVoiceFiles: "Aucun fichier de voix sherpa-onnx dans ce dépôt.",

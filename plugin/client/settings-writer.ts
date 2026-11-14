@@ -25,9 +25,27 @@ export interface SettingsPort<V> {
 }
 
 export type WriteFailure = { patch: Partial<unknown>; reason: string | null };
+export type WriteResult = { ok: true } | { ok: false; reason: string | null };
+
+/**
+ * A copy with every `undefined` removed (object keys and array items). Paseo validates saved
+ * settings as JSON values and rejects a document with an `undefined` anywhere in it.
+ */
+export function jsonSafe<T>(value: T): T {
+  if (Array.isArray(value)) return value.filter((v) => v !== undefined).map((v) => jsonSafe(v)) as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) if (v !== undefined) out[k] = jsonSafe(v);
+    return out as T;
+  }
+  return value;
+}
 
 export class SettingsWriter<V extends object> {
   private queued: Partial<V> | null = null;
+  private queuedWaiters: ((result: WriteResult) => void)[] = [];
+  /** The error thrown by the last failed save, when Paseo gave one. */
+  private thrown: string | null = null;
   private inFlight: Partial<V> | null = null;
   private running = false;
   private idle: Promise<void> = Promise.resolve();
@@ -44,11 +62,13 @@ export class SettingsWriter<V extends object> {
     return { ...(this.inFlight ?? {}), ...(this.queued ?? {}) } as Partial<V>;
   }
 
-  update(patch: Partial<V>): Promise<void> {
+  /** Queues a change; resolves once it is saved, or with the reason Paseo gave for refusing it. */
+  update(patch: Partial<V>): Promise<WriteResult> {
     this.queued = { ...(this.queued ?? {}), ...patch } as Partial<V>;
+    const result = new Promise<WriteResult>((resolve) => this.queuedWaiters.push(resolve));
     this.onChange();
     if (!this.running) this.idle = this.drain();
-    return this.idle;
+    return result;
   }
 
   /** Resolves when everything queued so far has been saved or reported. */
@@ -61,7 +81,10 @@ export class SettingsWriter<V extends object> {
     try {
       while (this.queued) {
         const patch = this.queued;
+        const waiters = this.queuedWaiters;
         this.queued = null;
+        this.queuedWaiters = [];
+        this.thrown = null;
         this.inFlight = patch;
         this.onChange();
         const first = await this.attempt(patch);
@@ -74,7 +97,9 @@ export class SettingsWriter<V extends object> {
           saved = (await this.attempt(patch)).ok;
         }
         this.inFlight = null;
-        if (!saved) this.onFailure({ patch, reason: this.lastError() });
+        const reason = saved ? null : (this.lastError() ?? this.thrown);
+        if (!saved) this.onFailure({ patch, reason });
+        for (const resolve of waiters) resolve(saved ? { ok: true } : { ok: false, reason });
         this.onChange();
       }
     } finally {
@@ -85,7 +110,10 @@ export class SettingsWriter<V extends object> {
   private async attempt(patch: Partial<V>): Promise<{ ok: boolean; revision: string | null }> {
     const doc = this.port.current();
     if (!doc) return { ok: false, revision: null };
-    const ok = await this.port.save({ ...doc.values, ...patch }, doc.revision).catch(() => false);
+    const ok = await this.port.save(jsonSafe({ ...doc.values, ...patch }), doc.revision).catch((error: unknown) => {
+      this.thrown = error instanceof Error ? error.message : String(error);
+      return false;
+    });
     // Wait until the saved document is shown, so the next save starts from it.
     if (ok) await this.port.revisionAfter(doc.revision);
     return { ok, revision: doc.revision };
@@ -156,5 +184,7 @@ export function useSettingsWriter<V extends object>(settings: SettingsLike<V>, o
 
   const values = ready ? ({ ...settings.values, ...writer.pending() } as V) : null;
   const update = useCallback((patch: Partial<V>) => void writer.update(patch), [writer]);
-  return { values, update, writer };
+  /** Like update, but resolves with whether this change was saved. */
+  const save = useCallback((patch: Partial<V>) => writer.update(patch), [writer]);
+  return { values, update, save, writer };
 }

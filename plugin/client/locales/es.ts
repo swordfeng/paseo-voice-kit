@@ -412,6 +412,7 @@ export const es: Messages = {
     sha256Hint: "Opcional. Se comprueba tras la descarga.",
     cancel: "Cancelar",
     add: "Añadir modelo",
+    saveFailed: "No se pudo añadir el modelo.",
     errors: {
       pressLookUp: "Escribe un repositorio y pulsa Buscar.",
       noVoiceFiles: "No hay archivos de voz sherpa-onnx en este repositorio.",

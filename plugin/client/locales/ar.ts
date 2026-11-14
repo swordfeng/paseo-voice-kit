@@ -413,6 +413,7 @@ export const ar: Messages = {
     sha256Hint: "اختياري. يُتحقق منه بعد التنزيل.",
     cancel: "إلغاء",
     add: "إضافة النموذج",
+    saveFailed: "تعذّرت إضافة النموذج.",
     errors: {
       pressLookUp: "أدخل مستودعًا ثم اضغط بحث.",
       noVoiceFiles: "لا توجد ملفات أصوات sherpa-onnx في هذا المستودع.",

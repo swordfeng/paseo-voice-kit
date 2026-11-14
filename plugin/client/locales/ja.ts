@@ -412,6 +412,7 @@ export const ja: Messages = {
     sha256Hint: "省略可。ダウンロード後に照合します。",
     cancel: "キャンセル",
     add: "モデルを追加",
+    saveFailed: "モデルを追加できませんでした。",
     errors: {
       pressLookUp: "リポジトリを入力して「検索」を押してください。",
       noVoiceFiles: "このリポジトリには sherpa-onnx の声のファイルがありません。",

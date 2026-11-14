@@ -7,6 +7,7 @@ import { Pressable, Text, View } from "react-native";
 import { LANGUAGES } from "../shared/languages";
 import { hfLookupRpc, type HfLookup } from "../shared/rpc";
 import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, SHERPA_FAMILIES, type CustomModel } from "../shared/settings";
+import { customModelFromDraft } from "./custom-model";
 import { formatBytes } from "./format";
 import { errorText, languageName, languageOptionLabel, useText, type Translate } from "./i18n";
 
@@ -21,9 +22,6 @@ const SOURCES: { value: Source; stt: boolean; tts: boolean }[] = [
   { value: "sherpa", stt: true, tts: true },
 ];
 
-function slug(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "model";
-}
 
 /** Qwen3-TTS (MLX or GGUF) has its 10 languages fixed; other voice models need them chosen. */
 function isQwen(family: string | undefined, found: HfLookup | undefined): boolean {
@@ -131,13 +129,16 @@ export function CustomModelForm({
   kind: Kind;
   theme: PluginTheme;
   onClose(): void;
-  onSave(model: CustomModel): void;
+  /** Saves the model; resolves with null once saved, or the reason it couldn't be. */
+  onSave(model: CustomModel): Promise<string | null>;
 }) {
   // Drafts live in state below, so a language change only re-renders the text.
   const { t } = useText();
   const [source, setSource] = useState<Source>("huggingface");
   const [fields, setFields] = useState<Partial<CustomModel>>({});
   const [tried, setTried] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
   const lookupRpc = useRpc(hfLookupRpc);
   const lookup = useMutation({
@@ -188,17 +189,17 @@ export function CustomModelForm({
   const reset = () => {
     setFields({});
     setTried(false);
+    setSaveError(null);
     setRepoInput("");
     setSource("huggingface");
     lookup.reset();
   };
-  const save = () => {
+  const save = async () => {
     setTried(true);
-    if (problem) return;
+    if (problem || saving) return;
     const label = draft.label!.trim();
     const gguf = found?.suggestion.source === "gguf" || draft.family === GGUF_QWEN_FAMILY;
-    onSave({
-      id: `custom-${slug(label)}-${Math.random().toString(36).slice(2, 6)}`,
+    const model = customModelFromDraft({
       label,
       kind,
       source: effectiveSource,
@@ -224,7 +225,13 @@ export function CustomModelForm({
       ggufModelFile: gguf ? draft.ggufModelFile?.trim() || undefined : undefined,
       ggufCodecFile: gguf ? draft.ggufCodecFile?.trim() || undefined : undefined,
     });
-    reset();
+    // Keep everything entered until the model is actually saved.
+    setSaving(true);
+    setSaveError(null);
+    const failure = await onSave(model).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+    setSaving(false);
+    if (failure === null) reset();
+    else setSaveError(failure);
   };
 
   return (
@@ -346,6 +353,11 @@ export function CustomModelForm({
           {kind === "tts" && !qwen ? <LanguagePicker theme={theme} value={draft.languages ?? []} onChange={(languages) => set({ languages })} /> : null}
           {found?.suggestion.source === "mlx" || MLX_FAMILY_VALUES.has(draft.family ?? "") ? <Text style={styles.note}>{t("form.mlxNote")}</Text> : null}
           {tried && problem ? <Text style={styles.error}>{problem}</Text> : null}
+          {saveError !== null ? (
+            <Text selectable style={styles.error}>
+              {saveError ? t("form.saveFailed") + " " + saveError : t("form.saveFailed")}
+            </Text>
+          ) : null}
           <View style={styles.row}>
             <Pressable
               accessibilityRole="button"
@@ -358,7 +370,14 @@ export function CustomModelForm({
             >
               <Text style={styles.buttonText(false)}>{t("form.cancel")}</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={t("form.add")} style={styles.button(true)} onPress={save}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("form.add")}
+              accessibilityState={{ disabled: saving }}
+              disabled={saving}
+              style={[styles.button(true), saving ? { opacity: 0.6 } : null]}
+              onPress={() => void save()}
+            >
               <Text style={styles.buttonText(true)}>{t("form.add")}</Text>
             </Pressable>
           </View>

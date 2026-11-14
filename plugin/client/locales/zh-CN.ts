@@ -412,6 +412,7 @@ export const zhCN: Messages = {
     sha256Hint: "可选。下载后校验。",
     cancel: "取消",
     add: "添加模型",
+    saveFailed: "无法添加模型。",
     errors: {
       pressLookUp: "请输入仓库并点按“查找”。",
       noVoiceFiles: "此仓库中没有 sherpa-onnx 声音文件。",

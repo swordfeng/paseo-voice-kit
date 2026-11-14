@@ -412,6 +412,7 @@ export const ko: Messages = {
     sha256Hint: "선택 사항. 다운로드 후 확인합니다.",
     cancel: "취소",
     add: "모델 추가",
+    saveFailed: "모델을 추가하지 못했습니다.",
     errors: {
       pressLookUp: "저장소를 입력하고 찾기를 누르세요.",
       noVoiceFiles: "이 저장소에 sherpa-onnx 목소리 파일이 없습니다.",

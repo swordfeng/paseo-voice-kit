@@ -412,6 +412,7 @@ export const ptBR: Messages = {
     sha256Hint: "Opcional. Verificado após o download.",
     cancel: "Cancelar",
     add: "Adicionar modelo",
+    saveFailed: "Não foi possível adicionar o modelo.",
     errors: {
       pressLookUp: "Digite um repositório e toque em Procurar.",
       noVoiceFiles: "Nenhum arquivo de voz sherpa-onnx neste repositório.",

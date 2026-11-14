@@ -217,7 +217,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   // Changes save one at a time against the newest revision; a change Paseo rejects is reported
   // and the saved value is shown again. Text fields keep what was typed.
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
-  const { values, update: queueUpdate } = useSettingsWriter<Preferences>(settings, ({ reason }) => {
+  const { values, update: queueUpdate, save: saveNow } = useSettingsWriter<Preferences>(settings, ({ reason }) => {
     const message = sentences(tRef.current, tRef.current("status.saveFailed"), reason);
     setSaveFailure(message);
     toast.error(message);
@@ -615,9 +615,12 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
         kind={adding ?? "stt"}
         theme={theme}
         onClose={() => setAdding(null)}
-        onSave={(model) => {
+        onSave={async (model) => {
+          setSaveFailure(null);
+          const result = await saveNow({ customModels: [...values.customModels, model] });
+          if (!result.ok) return result.reason ?? "";
           setAdding(null);
-          update({ customModels: [...values.customModels, model] });
+          return null;
         }}
       />
     </ScrollView>
