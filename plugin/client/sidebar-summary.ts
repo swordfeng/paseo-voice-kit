@@ -68,7 +68,8 @@ export function sidebarSummary(
   // In effect: features Voice Kit should handle that Paseo actually routes to it. Which ones it
   // should handle comes from their switches: a feature turned off still reports "override" or
   // "locked" when Paseo's own setting is changed or locked. Until settings load, "off" stands in.
-  const wanted = status.sites.filter((s) => (values ? values[SITE_SWITCH[s.site]] : s.state !== "off"));
+  // Speaking with no voice model enabled is the user's choice too, not a failure.
+  const wanted = status.sites.filter((s) => (values ? values[SITE_SWITCH[s.site]] : s.state !== "off") && s.reason?.code !== "noVoiceModels");
   const active = wanted.filter((s) => s.state === "active");
   const featureNames = (sites: SiteStatus[]) => joinList(t, sites.map((s) => t(`sites.${s.site}`)));
   const phase = t("sidebar.a11yPhase", { phase: t(`phase.${status.phase}`) });
