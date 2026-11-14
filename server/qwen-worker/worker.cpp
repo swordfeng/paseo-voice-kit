@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
 #endif
     if (argc != 4) return 2;
     qt_log_set([](qt_log_level level, const char *message, void *) {
-        if(level>=QT_LOG_WARN)std::fprintf(stderr,"[qwen] %s\n",message);
+        if(level>=QT_LOG_INFO)std::fprintf(stderr,"[qwen] %s\n",message);
     },nullptr);
     ggml_backend_load_all();
     std::string selected = "CPU", accelerator = "cpu";
@@ -68,6 +68,11 @@ int main(int argc, char **argv) {
     if (std::string(qt_model_type(context)) != "custom_voice") {
         error("Only Qwen3-TTS CustomVoice GGUF models are supported"); qt_free(context); return 1;
     }
+    // Initialization diagnostics contain model/device details, never request text.
+    // Keep ordinary synthesis logs at warning level after loading finishes.
+    qt_log_set([](qt_log_level level, const char *message, void *) {
+        if(level>=QT_LOG_WARN)std::fprintf(stderr,"[qwen] %s\n",message);
+    },nullptr);
     frame("{\"event\":\"ready\",\"bytes\":0,\"device\":" + escaped(accelerator) + "}");
     std::string line;
     // Read a line without allowing unbounded growth on malformed private IPC input.

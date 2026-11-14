@@ -116,7 +116,9 @@ impl Worker {
             input: Some(input),
             output: rx,
         };
-        let ready = worker.receive(Duration::from_secs(30))?;
+        // Cold CPU loads on virtualized Macs can exceed 30 seconds. Keep a
+        // bounded startup budget separate from each synthesis deadline.
+        let ready = worker.receive(Duration::from_secs(90))?;
         ensure!(
             ready.header["event"] == "ready",
             "GGUF worker did not become ready"

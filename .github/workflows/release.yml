@@ -224,6 +224,7 @@ jobs:
           test "$code" = "401"
           kill %1 || true
       - name: Real model CPU inference and round trips
+        id: real-models
         timeout-minutes: 12
         shell: bash
         run: |
@@ -234,6 +235,26 @@ jobs:
           python3 scripts/smoke-real-models.py --exe "$EXE" \
             --models-dir "$RUNNER_TEMP/real-models" --output "$RUNNER_TEMP/real-model-report" \
             --accelerator cpu --timeout 540 "${extra[@]}"
+      - name: Diagnose Linux ARM CPU variant failures
+        if: failure() && steps.real-models.outcome == 'failure' && matrix.key == 'linux-arm64'
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          lscpu > "$RUNNER_TEMP/real-model-report/cpu.txt"
+          mkdir -p "$RUNNER_TEMP/disabled-cpu-variants"
+          # Compare the same archive and weights with the baseline Whisper CPU
+          # kernel. The original failure still blocks publication; this is evidence only.
+          root=$(dirname "$EXE")
+          test -f "$root/libggml-cpu-armv8.0_1.so"
+          for lib in "$root"/libggml-cpu-*.so; do
+            if [[ "$(basename "$lib")" != libggml-cpu-armv8.0_1.so ]]; then
+              mv "$lib" "$RUNNER_TEMP/disabled-cpu-variants/"
+            fi
+          done
+          python3 scripts/smoke-real-models.py --exe "$EXE" \
+            --models-dir "$RUNNER_TEMP/real-models" \
+            --output "$RUNNER_TEMP/real-model-report/baseline" \
+            --accelerator cpu --timeout 540
       - name: Preserve real model diagnostics
         if: always()
         uses: actions/upload-artifact@v4
