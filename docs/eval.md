@@ -236,8 +236,12 @@ Qwen3-TTS 0.6B durations at speed 1 and 1.25: darwin-arm64 3.12 → 2.496 s, lin
 allows 80 ms). The Whisper base transcript on Linux arm64 was "Hello, this is as a speech
 test.", close to but not exactly the input; the earlier repeated-word output didn't recur.
 
-Linux arm64: ggml's SVE dot products dropped accumulated tail lanes, giving wrong results on
-CPUs with SVE. `6ef5128` keeps them, and `scripts/test-sve-dots.py --require-sve` checks the
+Linux arm64: ggml's SVE dot products dropped accumulated tail lanes, which made Whisper
+repeat words on CPUs with SVE. A diagnostic run before the fix (43600845463) showed the
+cause: with the same archive and weights, the SVE build transcribed the English sample as
+"Hello, this is Speech Speech Speech …", while forcing the non-SVE `armv8.0_1` variant
+passed all four checks with the exact English text, and an exact dot product of length 1500
+returned 1304 instead of 1500. `6ef5128` keeps the tail lanes, and `scripts/test-sve-dots.py --require-sve` checks the
 packaged kernels against exact scalar results: 3 compatible variants (armv8.2_3,
 armv8.6_1, armv8.6_2), 22 checks each, 16-byte SVE width, none skipped.
 
@@ -247,4 +251,3 @@ test-only change), and an Intel Mac model download timed out before inference. B
 passed in focused runs. The tagged 0.1.1 release must pass its own gates. The checks are
 short content and timing checks in English and Chinese, not quality scores for every
 language, and the times are from shared CI runners.
-

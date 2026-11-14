@@ -17,7 +17,8 @@ If Voice Kit isn't ready, Paseo uses its built-in speech instead.
   sentence uses the first enabled model that natively speaks its language. New installs
   start with Supertonic 3 alone (31 languages, on the CPU). Qwen3-TTS 0.6B and 1.7B
   (Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish and
-  Italian; GPU when available, otherwise CPU; tested only on Apple Silicon) are optional:
+  Italian; GPU when available, otherwise CPU; GPU use tested only on Apple Silicon, CPU
+  checks of the 0.1.1 source on all five platforms) are optional:
   they download only after you enable them. Text in a language none of your enabled
   models speaks isn't read with the wrong pronunciation: the whole reply is refused and
   the page says which model could speak it. Catalan, Tagalog, Swahili and Malay can be

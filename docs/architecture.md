@@ -98,7 +98,8 @@ plugin hands it to the server, which builds a chain (`voicekit-tts-chain`, engin
   pronunciation) are used only for languages the user allows (`ttsApproximateLanguages`).
 - New installs enable Supertonic 3 only. Qwen3-TTS 0.6B and 1.7B (GGUF, qwentts.cpp) are
   optional and download only after they are enabled. They use the GPU when available,
-  otherwise the CPU; only Apple Silicon has been tested.
+  otherwise the CPU. GPU use has been tested only on Apple Silicon (Metal); the 0.1.1 source
+  passed short CPU checks with them on all five platforms (see eval.md).
 - Custom voice models join the list only with the languages they speak (`languages`); Qwen3-TTS
   models have their 10 languages fixed. Custom GGUF Qwen3-TTS models use a talker and a codec
   file (`ggufModelFile`, `ggufCodecFile`); a Hugging Face lookup downloads only that pair.
