@@ -223,7 +223,26 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' localhost:48600/v1/models)
           test "$code" = "401"
           kill %1 || true
+      - name: Real model CPU inference and round trips
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          extra=()
+          if [[ "${{ matrix.key }}" == win32-x64 || "${{ matrix.key }}" == linux-x64 ]]; then
+            extra+=(--large-qwen)
+          fi
+          python3 scripts/smoke-real-models.py --exe "$EXE" \
+            --models-dir "$RUNNER_TEMP/real-models" --output "$RUNNER_TEMP/real-model-report" \
+            --accelerator cpu --timeout 540 "${extra[@]}"
+      - name: Preserve real model diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-models-${{ matrix.key }}
+          path: ${{ runner.temp }}/real-model-report
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
+        if: always() && env.ASSET != ''
         with:
           name: voicekit-${{ matrix.key }}
           path: ${{ env.ASSET }}
