@@ -67,14 +67,14 @@ check). The plugin keeps that choice fixed and reports it as `defaultSttModel`. 
 voice mode use it until the user picks a model, which then stays as chosen. A request's OpenAI `model` field picks among the models a server is
 serving, so dictation and voice mode can use different models.
 
-Whisper, Qwen3-ASR, SenseVoice and Paraformer use a shared Silero VAD preprocessing
-layer on the uploaded audio. It rejects clips
+All local whole-utterance recognizers (Whisper and every Sherpa ASR family, including
+custom models) use a shared Silero VAD preprocessing layer on the uploaded audio. It rejects clips
 without detected speech and removes leading and trailing idle audio, retaining
 300 ms at both edges and all pauses between speech segments. This prevents long
 microphone waiting periods from reaching language detection and decoding. The VAD
 model reuses Paseo's local copy or downloads as a dependency; it loads on the first
-request and unloads with its recognizer. Other recognizer families and remote
-services keep their original input until separately verified. Audio is not saved
+request and unloads with its recognizer. Remote services keep their original input.
+Audio is not saved
 unless the server's debug capture flag is used.
 
 Whisper base then detects the spoken language, and the large model's

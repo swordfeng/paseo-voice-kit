@@ -423,11 +423,16 @@ speech sites active. These observations do not revalidate other platforms.
 
 ## Shared ASR speech filtering (2026-11-14)
 
-Silero filtering now wraps verified local whole-utterance recognizers at the runtime
-boundary, rather than being duplicated inside Whisper and Qwen's Sherpa adapter.
-Whisper, Qwen3-ASR, SenseVoice and Paraformer use it; other Sherpa families and remote
-services keep their original input. Existing 300 ms edge padding and internal pauses
-are unchanged. The filter shares its recognizer's first-use load and idle unload.
+Silero filtering wraps local whole-utterance recognizers at the runtime boundary,
+rather than being duplicated inside Whisper and Qwen's Sherpa adapter. It initially
+used a family whitelist, then was made the default for all local ASR (Whisper and
+every Sherpa ASR family, including custom models). The whitelist reflected limited
+test coverage, not an observed incompatibility. Remote services keep their original
+input. Existing 300 ms edge padding and internal pauses are unchanged. The filter
+shares its recognizer's first-use load and idle unload. Native dependency checks
+cover all catalogued local ASR, unknown custom families, and exclusion of TTS,
+remote services and the internal VAD resource. Actual model checks below cover
+Whisper, Qwen ASR, SenseVoice and Paraformer; other models were not inferred anew.
 
 Apple M6, no downloads: compared the previous unfiltered SenseVoice int8 and custom
 Paraformer zh-small against the wrapped recognizers using the same local TTS WAVs.

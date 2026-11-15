@@ -992,11 +992,19 @@ mod tests {
         custom.id = "custom-qwen".into();
         assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
         custom.family = Some("transducer".into());
-        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
-        for family in ["sense_voice", "paraformer"] {
-            custom.family = Some(family.into());
+        assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        for entry in rt.catalog.entries().iter().filter(|e| e.kind == Kind::Stt && matches!(e.engine, Engine::Whisper | Engine::Sherpa)) {
+            assert!(rt.with_dependencies(entry).iter().any(|m| m.id == "silero-vad"), "{}", entry.id);
+        }
+        // Custom/new Sherpa families get the same preprocessing without a whitelist.
+        for family in [None, Some("a-new-family")] {
+            custom.family = family.map(str::to_string);
             assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
         }
+        custom.kind = Kind::Tts;
+        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"), "voice models do not acquire an ASR filter");
+        assert!(!crate::speech_filter::required(crate::speech_filter::model()), "the VAD resource is not itself a recognizer");
+        custom.kind = Kind::Stt;
         custom.engine = Engine::Openai;
         assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"), "remote input stays untouched");
         assert!(rt.missing_models().iter().any(|m| m.id == "silero-vad"));

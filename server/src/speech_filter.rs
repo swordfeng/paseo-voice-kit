@@ -5,16 +5,16 @@ use std::{ops::Range, path::Path, sync::{Arc, Mutex, OnceLock}};
 
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 
-use crate::{audio::Pcm, catalog::{Engine, ModelEntry}, engine::{SttEngine, Timings, TranscribeRequest}};
+use crate::{audio::Pcm, catalog::{Engine, Kind, ModelEntry}, engine::{SttEngine, Timings, TranscribeRequest}};
 
-/// These recognizers need speech bounds rather than an accumulated idle microphone buffer.
+/// All local whole-utterance recognizers share the same microphone input hygiene.
 pub fn required(entry: &ModelEntry) -> bool {
-    entry.engine == Engine::Whisper
-        || (entry.engine == Engine::Sherpa && matches!(entry.family.as_deref(), Some("qwen3_asr" | "sense_voice" | "paraformer")))
+    entry.kind == Kind::Stt && entry.id != model().id
+        && matches!(entry.engine, Engine::Whisper | Engine::Sherpa)
 }
 
-/// Shared preprocessing for verified local, whole-utterance recognizers. Remote engines
-/// and unverified families keep their original input. One filter lives with each engine,
+/// Shared preprocessing for local, whole-utterance recognizers. Remote engines
+/// keep their original input. One filter lives with each engine,
 /// so idle unloading releases both and startup still loads nothing.
 pub struct FilteredStt {
     engine: Arc<dyn SttEngine>,
