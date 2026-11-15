@@ -747,3 +747,34 @@ not word-for-word correctness of the entire paragraph; the full clip exceeded
 this Qwen-ASR ONNX export's 512-token audio context. 47 native tests passed,
 3 local fixtures ignored. The server was deployed with rollback retained and
 only the plugin reloaded; saved preferences were preserved.
+
+### Model-token text budgets (2026-11-15)
+
+The temporary 80-character ceiling is replaced by a shared budget of 64 text
+tokens per sentence/fragment. Both private workers count using the same loaded
+text tokenizer as synthesis, without a second vocabulary or another runtime.
+Counts cover the input text, not the model's conditioning template. Oversized
+sentences prefer clause/word boundaries; candidate prefixes are measured again
+because BPE counts need not be monotonic. UTF-8 boundaries and all source text
+are preserved. An independent 8 KB probe limit keeps escaped private IPC JSON
+under its existing frame bound. This is a conservative input policy, not a
+conversion from text tokens to speech duration; generation caps remain unchanged.
+
+`scripts/check-qwen-tokenizers.py` ran with a 60-second total budget on the existing
+0.6B models, with both workers reporting Metal. EN/ZH/JA fixtures of 29/12/15
+characters counted as 8/6/8 tokens in both backends. A 415-character English
+fixture counted as 91 tokens. Counts were stable after intervening queries.
+49 native tests passed (3 local fixtures ignored), including token-based versus
+character-based budgeting, oversized IPC probes, Unicode preservation, decimal
+sentence boundaries, and tokenizer failures.
+
+The previous 235-character Chinese failure case again passed on both engines,
+with the same 53.04/52.08-second MLX/GGUF outputs and endpoint read-back checks.
+A 354-character English sentence exercised over-budget splitting on both engines
+(2 generations per engine), producing 29.76/27.60-second outputs. First/last
+12-second excerpts included the river at the beginning and city history at the
+end. These are endpoint and function checks, not word-for-word quality scores.
+Temperature 0.2 and seed 42 are unchanged. Deployment replaces both workers and
+the server together, retains rollback, and reloads only Voice Kit.
+Live verification found all three speech sites active, saved preferences unchanged,
+and a successful MLX Metal preview through the reloaded plugin.

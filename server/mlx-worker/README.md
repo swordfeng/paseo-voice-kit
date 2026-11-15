@@ -40,6 +40,11 @@ These checks never install into Paseo or change its settings. See
 `VOICEKIT_MLX_PROFILE=1` records text-free timing on stderr.
 The speech server supplies temperature and seed through private IPC, using the
 same sampling policy for MLX and GGUF.
+
+Private IPC also accepts `{op:"count_tokens", text:...}` and returns a
+`text_tokens` frame with `count` and no PCM. It reuses the model's loaded text
+tokenizer, without running inference or loading a second tokenizer. Generation
+requests still require the shared temperature and seed fields.
 `diagnostics/metal-compile-timers.patch` is an optional probe for the MLX C++
 submodule; the normal build does not apply it. It can intentionally create cold
 source-cache entries and is not part of the distributed runtime.

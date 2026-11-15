@@ -36,7 +36,7 @@ def build(args):
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, timeout=5).decode().strip()
     if revision != REVISION:
         raise RuntimeError("Unexpected upstream revision; review the patch before updating")
-    for name in ["respect-requested-token-limit.patch", "read-only-model-loading.patch"]:
+    for name in ["respect-requested-token-limit.patch", "read-only-model-loading.patch", "text-token-count.patch"]:
         patch = ROOT / "patches" / name
         applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
                                  cwd=checkout, capture_output=True, timeout=5).returncode == 0

@@ -74,3 +74,9 @@ license and Voice Kit source patches are under `mlx-runtime/notices/`. The patch
 respect the requested token budget and make model loading read-only. Any bundled
 Swift compatibility dylibs are covered by the included Swift Apache 2.0 license
 with runtime exception. Model weights remain separate from the software archive.
+
+The GGUF worker build adds `server/qwen-worker/token-count.inc` to the pinned
+qwentts.cpp translation unit, exposing its already-loaded BPE tokenizer through
+private IPC. The adapter is included in `gguf-runtime/notices/`. The native MLX
+helper includes a small source patch exposing its loaded tokenizer for the same
+text-budgeting operation; the patch is in `mlx-runtime/notices/patches/`.

@@ -119,7 +119,7 @@ write or remove model folders. MLX models are added from Hugging Face or a local
 folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
 9 preset voices are supported; Base and VoiceDesign models aren't.
 The speech server sends both Qwen workers the same temperature (0.2) and seed (42)
-through private IPC, from one shared policy in `engine/mod.rs`. Both main and
+through private IPC, from one shared policy in `engine/qwen.rs`. Both main and
 acoustic talkers use that temperature. Process reuse, bounded requests,
 worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
 and existing model selections are unchanged by the backend migration.
@@ -129,10 +129,14 @@ keeping the pitch (native processing built into the server, with nothing extra t
 speed of 1 leaves the audio as generated. This doesn't shorten synthesis. Other models apply
 the speed natively. Each worker resets its random seed per generation, so repeated
 text and voice are reproducible within that backend; different backends need not
-produce identical audio. Both backends generate one sentence at a time with an 80-character ceiling,
-prefer clause or whitespace boundaries for oversized sentences, and concatenate
-the resulting PCM without dropping source text. This bounds individual generations under the existing token
-and audio limits. These changes are in the source for 0.1.1;
+produce identical audio. Both backends generate one sentence at a time, budgeting
+at most 64 text tokens with their loaded model's tokenizer through private IPC.
+Oversized sentences split at clause/word boundaries when possible; every candidate
+is re-counted before use. The shared planner preserves Unicode and all source text,
+then concatenates PCM. An 8 KB probe limit bounds private JSON messages independently
+of the text-token budget. Text-token counts do not bound speech duration, so the
+existing 1200 speech token/96-second generation limits and ten-minute assembled
+output cap remain. These changes are in the source for 0.1.1;
 the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
 Personas (`options.personas` of the chain) pair similar voices across the enabled models.

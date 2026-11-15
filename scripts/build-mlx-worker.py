@@ -102,7 +102,7 @@ def notices(stage):
     (destination / "DEPENDENCIES.md").write_text(
         "# Native MLX helper dependencies\n\nOriginal notices include nested bundled dependencies. "
         "The Swift compatibility library is redistributed from the build toolchain; its license is included.\n\n"
-        "Voice Kit patches the Qwen token budget and makes model/tokenizer loading read-only; patches are included.\n\n"
+        "Voice Kit patches the Qwen token budget, exposes loaded text-token counting, and makes model/tokenizer loading read-only; patches are included.\n\n"
         "| Package | Version / revision | Source |\n| --- | --- | --- |\n" + "\n".join(rows) + "\n")
 
 

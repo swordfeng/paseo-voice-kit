@@ -10,8 +10,9 @@ struct Request: Decodable {
     let text: String
     let voice: String?
     let language: String?
-    let temperature: Float
-    let seed: UInt64
+    let temperature: Float?
+    let seed: UInt64?
+    let op: String?
 }
 
 struct Frames: Sendable {
@@ -85,8 +86,13 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                     do {
                         guard line.utf8.count <= 65_536 else { throw Failure("request too large") }
                         let request = try JSONDecoder().decode(Request.self, from: Data(line.utf8))
+                        if request.op == "count_tokens" {
+                            guard request.text.utf8.count <= 8_000 else { throw Failure("token count request too large") }
+                            try frames.send("text_tokens", fields: ["count":try model.textTokenCount(request.text)])
+                            continue
+                        }
                         guard !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                              request.text.count <= 4096 else { throw Failure("invalid text length") }
+                              request.text.utf8.count <= 8_000 else { throw Failure("invalid text length") }
                         let voice = request.voice?.lowercased() ?? "serena"
                         guard voices.contains(voice) else { throw Failure("unsupported speaker") }
                         let language = request.language.flatMap { languages[$0] } ?? "Auto"
@@ -96,10 +102,10 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                         var count = 0
                         var ended = false
                         var tokens = 0
-                        guard request.temperature.isFinite, (0...2).contains(request.temperature),
-                              request.seed <= UInt64(Int64.max) else { throw Failure("invalid sampling parameters") }
-                        let parameters = GenerateParameters(maxTokens: 1200, temperature: request.temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
-                        MLXRandom.seed(request.seed)
+                        guard let temperature = request.temperature, let seed = request.seed,
+                              temperature.isFinite, (0...2).contains(temperature), seed <= UInt64(Int64.max) else { throw Failure("invalid sampling parameters") }
+                        let parameters = GenerateParameters(maxTokens: 1200, temperature: temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
+                        MLXRandom.seed(seed)
                         for try await event in model.generateStream(text: request.text, voice: voice,
                                 refAudio: nil, refText: nil, language: language,
                                 generationParameters: parameters, streamingInterval: 0.4) {

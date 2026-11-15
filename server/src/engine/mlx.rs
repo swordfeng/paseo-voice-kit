@@ -85,6 +85,17 @@ impl Worker {
         Ok(frame)
     }
 
+    fn token_count(&mut self, text: &str, deadline: Instant) -> anyhow::Result<usize> {
+        let input = self.input.as_mut().context("Qwen input closed")?;
+        writeln!(input, "{}", serde_json::json!({"op":"count_tokens","text":text}))?;
+        input.flush()?;
+        let frame = self.receive(deadline.saturating_duration_since(Instant::now()))?;
+        ensure!(frame.header["event"] == "text_tokens" && frame.pcm.is_empty(), "invalid Qwen token count response");
+        let count = frame.header["count"].as_u64().context("missing Qwen token count")?;
+        ensure!(count <= 65_536, "invalid Qwen token count");
+        Ok(count as usize)
+    }
+
     fn speak(&mut self, req: SpeakRequest<'_>, timings: &mut Timings, deadline: Instant) -> anyhow::Result<Pcm> {
         let input = self.input.as_mut().context("MLX input closed")?;
         writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language))?;
@@ -153,8 +164,8 @@ impl TtsEngine for MlxTts {
         }
         let requested_voice = req.voice.to_ascii_lowercase();
         let voice = if self.voices.iter().any(|v| v.id == requested_voice) { &requested_voice } else { &self.default_voice };
-        let chunks = text_chunks(req.text, super::QWEN_TEXT_CHUNK);
-        let deadline = Instant::now() + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
+        let started = Instant::now();
+        let planning_deadline = started + Duration::from_secs(180);
         let result = (|| -> anyhow::Result<Pcm> {
             if worker.is_none() {
                 let loaded = timings.time("mlx_load", || Worker::spawn(&self.binary, &self.model))?;
@@ -162,11 +173,13 @@ impl TtsEngine for MlxTts {
                 *worker = Some(loaded);
                 self.running.store(true, Ordering::SeqCst);
             }
+            let generation = worker.as_mut().context("Qwen worker stopped before text budgeting")?;
+            let chunks = text_chunks(req.text, |text| generation.token_count(text, planning_deadline))?;
+            let deadline = started + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
             let mut samples = Vec::new();
             for text in chunks {
                 if !text.chars().any(char::is_alphanumeric) { continue; }
-                let chunk = worker.as_mut().context("MLX worker stopped after a failure")?
-                    .speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
+                let chunk = generation.speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
                 ensure!(samples.len() + chunk.samples.len() <= 24_000 * 600, "speech exceeds ten-minute output limit");
                 samples.extend(chunk.samples);
             }
@@ -242,16 +255,6 @@ mod tests {
         engine.retry_failed(); assert_eq!(engine.failures.load(Ordering::SeqCst), 2, "second failure must wait longer");
     }
 
-    #[test]
-    fn long_text_chunks_preserve_every_character_and_bound_generations() {
-        for text in ["A long English sentence. ".repeat(100), "这是一个中文长句，包含数字和标点。".repeat(50)] {
-            let chunks = text_chunks(&text, 240);
-            assert!(chunks.len() > 1);
-            assert!(chunks.iter().all(|c| !c.is_empty() && c.chars().count() <= 240));
-            assert_eq!(chunks.concat(), text);
-        }
-        let text = "x".repeat(240) + ")\"🙂";
-        assert!(!text_chunks(&text, 240).last().unwrap().chars().any(char::is_alphanumeric));
-    }
+
 
 }

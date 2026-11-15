@@ -18,6 +18,8 @@
 #include <io.h>
 #endif
 
+extern "C" int voicekit_qwen_text_token_count(qt_context *, const char *, size_t);
+
 static std::string escaped(const std::string &s) {
     yyjson_mut_doc *d = yyjson_mut_doc_new(nullptr);
     yyjson_mut_doc_set_root(d, yyjson_mut_strcpy(d, s.c_str()));
@@ -133,6 +135,12 @@ int main(int argc, char **argv) {
         if (!doc) { error("invalid request JSON"); continue; }
         auto root = yyjson_doc_get_root(doc);
         std::string text = string_value(root, "text", ""), voice = string_value(root, "voice", "vivian"), language = string_value(root, "language", "auto");
+        if (string_value(root, "op", "speak") == "count_tokens") {
+            int count = voicekit_qwen_text_token_count(context, text.data(), text.size());
+            if (count < 0) error("text token count failed");
+            else frame("{\"event\":\"text_tokens\",\"bytes\":0,\"count\":" + std::to_string(count) + "}");
+            yyjson_doc_free(doc); continue;
+        }
         qt_tts_params params; qt_tts_default_params(&params);
         params.text = text.c_str(); params.speaker = voice.c_str(); params.lang = language.c_str();
         // Both workers receive the same sampling policy from the speech server.

@@ -20,6 +20,13 @@ for name,record in manifest.items():
     if '..' in pieces or member.issym() or member.islnk():raise RuntimeError('unsafe source archive member')
     member.name='/'.join(pieces);t.extract(member,folder,filter='data')
   stamp.write_text(record['sha256'])
+# Expose a private count adapter inside the pinned tokenizer's translation unit.
+# The source archive stays intact; the adapter is copied into generated sources.
+adapter=root/'server/qwen-worker/token-count.inc'
+shutil.copy2(adapter,sources/'qwentts/src/voicekit-token-count.inc')
+source=sources/'qwentts/src/qwen.cpp'
+include='\n#include "voicekit-token-count.inc"\n'
+if include not in source.read_text():source.write_text(source.read_text()+include)
 build=work/'build';darwin=platform.system()=='Darwin'
 cmd=['cmake','-S',str(root/'server/qwen-worker'),'-B',str(build),'-DQWEN_SOURCE_DIR='+str(sources/'qwentts'),'-DGGML_SOURCE_DIR='+str(sources/'ggml'),'-DCMAKE_BUILD_TYPE=Release','-DGGML_NATIVE=OFF','-DGGML_METAL='+('ON' if darwin else 'OFF'),'-DGGML_METAL_EMBED_LIBRARY=OFF','-DBUILD_SHARED_LIBS=ON','-DGGML_VULKAN='+('ON' if args.vulkan else 'OFF')]
 if not darwin:cmd+=['-DGGML_BACKEND_DL=ON','-DGGML_CPU_ALL_VARIANTS=ON']
@@ -55,6 +62,7 @@ notice=dest/'notices';notice.mkdir(exist_ok=True)
 for label,source in [('qwentts',sources/'qwentts'),('ggml',sources/'ggml')]:
  for name in ['LICENSE','LICENSE.txt']:
   if (source/name).exists():shutil.copy2(source/name,notice/(label+'-LICENSE'));break
+shutil.copy2(adapter,notice/adapter.name)
 shutil.copy2(root/'licenses/yyjson-MIT.txt',notice/'yyjson-LICENSE')
 shutil.copy2(root/'server/vendor/qwen-sources/SOURCES.json',notice/'SOURCES.json')
 print('Built Qwen worker: '+str(dest))

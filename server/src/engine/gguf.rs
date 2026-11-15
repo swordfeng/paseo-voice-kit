@@ -146,6 +146,17 @@ impl Worker {
         Ok(frame)
     }
 
+    fn token_count(&mut self, text: &str, deadline: Instant) -> anyhow::Result<usize> {
+        let input = self.input.as_mut().context("Qwen input closed")?;
+        writeln!(input, "{}", serde_json::json!({"op":"count_tokens","text":text}))?;
+        input.flush()?;
+        let frame = self.receive(deadline.saturating_duration_since(Instant::now()))?;
+        ensure!(frame.header["event"] == "text_tokens" && frame.pcm.is_empty(), "invalid Qwen token count response");
+        let count = frame.header["count"].as_u64().context("missing Qwen token count")?;
+        ensure!(count <= 65_536, "invalid Qwen token count");
+        Ok(count as usize)
+    }
+
     fn speak(
         &mut self,
         req: SpeakRequest<'_>,
@@ -313,9 +324,8 @@ impl TtsEngine for GgufTts {
         } else {
             &self.default_voice
         };
-        let chunks = text_chunks(req.text, super::QWEN_TEXT_CHUNK);
-        let deadline =
-            Instant::now() + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
+        let started = Instant::now();
+        let planning_deadline = started + Duration::from_secs(180);
         let result = (|| -> anyhow::Result<Pcm> {
             if worker.is_none() {
                 let loaded = timings.time("gguf_load", || {
@@ -329,15 +339,15 @@ impl TtsEngine for GgufTts {
                 self.device.store(loaded.device, Ordering::SeqCst);
                 *worker = Some(loaded);
             }
+            let generation = worker.as_mut().context("Qwen worker stopped before text budgeting")?;
+            let chunks = text_chunks(req.text, |text| generation.token_count(text, planning_deadline))?;
+            let deadline = started + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
             let mut samples = Vec::new();
             for text in chunks {
                 if !text.chars().any(char::is_alphanumeric) {
                     continue;
                 }
-                let chunk = worker
-                    .as_mut()
-                    .context("GGUF worker stopped after a failure")?
-                    .speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
+                let chunk = generation.speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
                 ensure!(
                     samples.len() + chunk.samples.len() <= 24_000 * 600,
                     "speech exceeds ten-minute output limit"
