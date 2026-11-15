@@ -571,3 +571,25 @@ or ASR caused the discrepancy. These timings are not a speech-quality comparison
 In this single fresh-worker sample, Python MLX completed the first utterance
 slightly sooner and had lower RSS. This does not establish a universal speed or
 memory ranking, nor does it reproduce the separate Swift first-request stalls.
+
+Source inspection clarified the cache comparison: the GGUF talker allocates
+FP32 K/V tensors for 4096 positions and immediately clears the entire backend
+buffer. The selected shared Metal path implements this as `memset` over the whole
+allocation, so it is not merely an untouched virtual-address reservation. Reset
+only rewinds sequence length; it does not release this buffer. The log labels
+896 "MB", but its divisor is 1024 squared: the capacity is actually 896 MiB.
+
+The installed Python MLX implementation grows KV capacity in 256-position blocks
+and preserves the incoming tensor dtype. A separate GPU prefill-only probe
+(30-second process budget, deliberately stopped at the first KV update) observed
+both K and V as **bfloat16**, shape `[1, 8, 19, 128]`. This verified dtype without
+generating a long utterance. At equal batch, architecture and 4096 positions,
+raw talker K/V payload would therefore be 896 MiB for the current FP32 GGUF
+implementation and 448 MiB for BF16 MLX. This is a tensor-size calculation, not a
+measured full-context process-memory comparison. Equal dtype and dimensions
+would give equal raw KV payload, independent of the framework.
+
+Valid-token occupancy, live allocation, allocator-reusable cache, and OS RSS are
+different concepts. The 0.916 GB RSS difference above does not establish an
+intrinsic 32% memory advantage for MLX at every sequence length, nor was its
+entire difference attributed experimentally to KV alone.
