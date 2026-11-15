@@ -1,6 +1,7 @@
 // Private, bounded stdio worker. A separate process isolates its GGML from whisper.cpp.
 #include "qwen.h"
 #include "ggml-backend.h"
+#include "gguf.h"
 #include "yyjson.h"
 #include <algorithm>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -38,11 +40,47 @@ static std::string string_value(yyjson_val *root, const char *key, const char *f
 static bool expired(void *p) {
     return std::chrono::steady_clock::now() >= *static_cast<std::chrono::steady_clock::time_point *>(p);
 }
+#ifdef _WIN32
+static bool needs_vulkan_mmvq_workaround(const char *path) {
+    // Read metadata only. Match model content, never a user-controlled filename.
+    gguf_context *meta = gguf_init_from_file(path, {true, nullptr});
+    if (!meta) {
+        std::fprintf(stderr, "[qwen] MMVQ compatibility check could not read talker GGUF; leaving backend defaults\n");
+        return false; // qt_init retains responsibility for reporting model errors.
+    }
+    const auto arch = gguf_find_key(meta, "general.architecture");
+    const auto width = gguf_find_key(meta, "qwen3-tts.talker.embedding_length");
+    const bool small_qwen = arch >= 0 && gguf_get_kv_type(meta, arch) == GGUF_TYPE_STRING &&
+        std::strcmp(gguf_get_val_str(meta, arch), "qwen3-tts") == 0 &&
+        width >= 0 && gguf_get_kv_type(meta, width) == GGUF_TYPE_UINT32 && gguf_get_val_u32(meta, width) == 1024;
+    bool q4 = false;
+    if (small_qwen) for (int64_t i = 0; i < gguf_get_n_tensors(meta); ++i) {
+        if (gguf_get_tensor_type(meta, i) == GGML_TYPE_Q4_K) { q4 = true; break; }
+    }
+    gguf_free(meta);
+    return small_qwen && q4;
+}
+#endif
 int main(int argc, char **argv) {
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (argc != 4) return 2;
+#ifdef _WIN32
+    // The pinned Vulkan MMVQ path makes the 1024-wide Q4 model exhaust its
+    // token limit on Windows/RTX 5090. Bypass activation-vector quantization
+    // only in this worker; keep Vulkan, FA, and the 1.7B Q8 path unchanged.
+    if (std::string(argv[3]) != "cpu" && needs_vulkan_mmvq_workaround(argv[1])) {
+        if (std::getenv("GGML_VK_DISABLE_MMVQ") || std::getenv("GGML_VK_FORCE_MMVQ")) {
+            std::fprintf(stderr, "[qwen] preserving explicit Vulkan MMVQ environment override\n");
+        } else {
+            if (_putenv_s("GGML_VK_DISABLE_MMVQ", "1") != 0) {
+                error("Could not configure Vulkan speech precision"); return 1;
+            }
+            std::fprintf(stderr, "[qwen] Vulkan MMVQ disabled for 1024-wide Q4 talker (worker only)\n");
+        }
+    }
+#endif
 #ifdef __APPLE__
     // Backend registration eagerly initializes Metal (and compiles its shaders),
     // even when qt_init will select CPU. CPU-only workers must avoid that work.
@@ -117,7 +155,11 @@ int main(int argc, char **argv) {
         qt_audio audio = {};
         auto rc = qt_synthesize(context, &params, &audio);
         if (rc != QT_STATUS_OK) error(qt_last_error());
-        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0 || audio.n_samples >= params.max_new_tokens * 1920) error("empty or token-limited audio");
+        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0 || audio.n_samples >= params.max_new_tokens * 1920) {
+            std::fprintf(stderr, "[qwen] rejected audio: channels=%d rate=%d samples=%d sample_limit=%d\n",
+                         audio.channels, audio.sample_rate, audio.n_samples, params.max_new_tokens * 1920);
+            error("empty or token-limited audio");
+        }
         else {
             std::vector<uint8_t> pcm(size_t(audio.n_samples) * 2);
             bool valid = true;
