@@ -794,3 +794,22 @@ audition is needed. The short English alternative was supplied as text, not test
 49 native tests passed, 3 local fixtures ignored. Both workers and the server were
 deployed with rollback retained, no default instruction enabled, and preferences
 preserved while reloading only Voice Kit.
+
+### Approved instruction default and GGUF baseline silence (2026-11-15)
+
+After audition, the user preferred the Chinese instruction samples. That exact
+instruction is now the shared default for MLX/GGUF at 0.2/42; an explicit empty
+`VOICEKIT_QWEN_INSTRUCTION` still disables it for comparisons. The server was
+rebuilt, deployed with rollback, and only Voice Kit reloaded, preserving preferences.
+The live preview succeeded using the user's configured MLX Vivian voice; the A/B
+files used Serena, so their PCM hashes are not a valid equality comparison.
+
+10 ms RMS windows with three consecutive windows above 100 PCM16 units measured
+5.35 seconds of leading silence and 1.42 seconds trailing in `gguf-baseline.wav`,
+versus 0.27/0.31 seconds with its instruction. Thresholds 30 and 300 gave nearly
+the same boundaries. The WAV itself contains that delay; it is not playback or
+network startup. The first nonzero baseline sample is at 0.547 seconds, so a simple
+nonzero trim would miss most of the quiet region. This observation does not yet
+isolate model generation from decoder behavior. A comparison copy retained 250 ms
+around the detected voice, slicing 5.10–10.35 seconds; the original was retained.
+No automatic TTS silence-trimming behavior was added.

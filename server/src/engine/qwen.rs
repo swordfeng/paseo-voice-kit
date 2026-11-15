@@ -5,11 +5,12 @@ const TEXT_TOKENS: usize = 64;
 // Bound private JSON probes (even control characters expand by at most 6x).
 const PROBE_BYTES: usize = 8_000;
 
+const DEFAULT_INSTRUCTION: &str = "用平静、自然、平稳的语气朗读，语速适中，吐字清楚，音量均匀，情绪克制，不加入笑声、叹气或额外语气词，不刻意卖萌或表演。";
+
 pub(super) fn request(text: &str, voice: &str, language: Option<&str>) -> Result<serde_json::Value> {
-    let instruction = std::env::var("VOICEKIT_QWEN_INSTRUCTION").ok();
-    if let Some(value) = &instruction {
-        ensure!(value.len() <= 2048 && !value.contains('\0'), "Qwen instruction exceeds private IPC limit");
-    }
+    let instruction = std::env::var("VOICEKIT_QWEN_INSTRUCTION")
+        .unwrap_or_else(|_| DEFAULT_INSTRUCTION.to_owned());
+    ensure!(instruction.len() <= 2048 && !instruction.contains('\0'), "Qwen instruction exceeds private IPC limit");
     Ok(serde_json::json!({"text":text,"voice":voice,"language":language,
         "temperature":0.2,"seed":42,"instruction":instruction}))
 }
