@@ -1,4 +1,4 @@
-// Prototype: private framed stdio protocol, compatible with the MLX Python worker.
+// Native MLX worker. Framed stdout is private IPC; model directories are read-only.
 import Foundation
 import Darwin
 import Metal
@@ -42,12 +42,20 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
 
 @main enum Worker {
     static func main() async {
+        if CommandLine.arguments.dropFirst() == ["--version"] {
+            print("voicekit-mlx-worker 1 (swift-mlx)")
+            return
+        }
         // Upstream logging must not corrupt the binary protocol.
         let saved = dup(STDOUT_FILENO)
         guard saved >= 0, dup2(STDERR_FILENO, STDOUT_FILENO) >= 0 else { exit(1) }
         let frames = Frames(output: FileHandle(fileDescriptor: saved, closeOnDealloc: true))
         do {
-            guard CommandLine.arguments.count == 2 else { throw Failure("expected a private model directory") }
+            guard CommandLine.arguments.count == 2 else { throw Failure("expected a model directory") }
+            let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+            let metal = executable.deletingLastPathComponent().appendingPathComponent("mlx.metallib")
+            guard FileManager.default.fileExists(atPath: metal.path) else { throw Failure("MLX Metal resource is missing") }
+            GPU.metallib = metal
             guard let gpu = MTLCreateSystemDefaultDevice() else { throw Failure("Metal GPU unavailable") }
             let gpuName = gpu.name
             try await Device.withDefaultDevice(.gpu) { @Sendable in
@@ -65,7 +73,7 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                 }
                 let model = try await Qwen3TTSModel.fromModelDirectory(folder)
                 guard model.sampleRate == 24_000 else { throw Failure("unexpected model sample rate") }
-                try frames.send("ready", fields: ["device": "metal", "metal_device": gpuName,
+                try frames.send("ready", fields: ["device": "metal", "backend":"swift-mlx", "protocol":1, "metal_device": gpuName,
                     "mlx_default_device": Device.defaultDevice().deviceType.rawValue,
                     "model_size": config["tts_model_size"] ?? NSNull(),
                     "quantization_bits": (config["quantization"] as? [String: Any])?["bits"] ?? NSNull()])
@@ -88,9 +96,8 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                         var tokens = 0
                         // Match the Python worker's sampling defaults; do not claim seed parity.
                         let parameters = GenerateParameters(maxTokens: 1200, temperature: 0.9, topP: 1, topK: 50, repetitionPenalty: 1.05)
-                        if let value = ProcessInfo.processInfo.environment["VOICEKIT_MLX_SEED"], let seed = UInt64(value) {
-                            MLXRandom.seed(seed)
-                        }
+                        let seed = UInt64(ProcessInfo.processInfo.environment["VOICEKIT_MLX_SEED"] ?? "42") ?? 42
+                        MLXRandom.seed(seed)
                         for try await event in model.generateStream(text: request.text, voice: voice,
                                 refAudio: nil, refText: nil, language: language,
                                 generationParameters: parameters, streamingInterval: 0.4) {

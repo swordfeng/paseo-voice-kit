@@ -69,10 +69,12 @@ class Server:
             args.append("--auto-pull")
         for folder in self.config.reuse_dir:
             args += ["--reuse-dir", str(folder)]
+        for catalog in getattr(self.config, "catalogs", []):
+            args += ["--catalog", str(catalog)]
         self.log = open(self.config.output / (self.phase + ".log"), "w", encoding="utf-8")
         try:
             self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                            stderr=self.log, start_new_session=os.name != "nt",
+                                            stderr=self.log, env=getattr(self.config, "env", None), start_new_session=os.name != "nt",
                                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
             first = queue.Queue()
             threading.Thread(target=lambda: first.put(self.process.stdout.readline()), daemon=True).start()

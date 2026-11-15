@@ -18,14 +18,14 @@ use crate::{
 /// Load a sherpa-onnx or remote voice model (anything but a chain).
 /// Why a voice model can never load with this build and settings, or None when it can.
 /// These are configuration facts, not failures: nothing here installs anything.
-fn unrunnable_voice(entry: &ModelEntry, store: &Store, use_gpu: bool) -> Option<String> {
+fn unrunnable_voice(entry: &ModelEntry, use_gpu: bool) -> Option<String> {
     match entry.engine {
         Engine::Mlx if !cfg!(all(target_os = "macos", target_arch = "aarch64")) => {
             Some("MLX voice models need an Apple Silicon Mac".into())
         }
         Engine::Mlx if !use_gpu => Some("MLX voice models need GPU acceleration; Acceleration is set to CPU only".into()),
-        Engine::Mlx if engine::mlx::python(&store.models_dir).is_none() => {
-            Some("The MLX speech runtime is not installed; run install-qwen-runtime.sh".into())
+        Engine::Mlx if engine::mlx::worker_path().is_none() => {
+            Some("The native MLX worker is missing from this speech server installation".into())
         }
         Engine::Gguf if engine::gguf::worker_path().is_none() => Some("The GGUF speech worker is missing from this installation".into()),
         _ => None,
@@ -38,7 +38,7 @@ fn load_leaf_tts(entry: &ModelEntry, store: &Store, provider: &str, threads: i32
     Ok(match entry.engine {
         Engine::Sherpa => Arc::new(sherpa::SherpaTts::load(entry, &inst, provider, threads, default_voice)?),
         Engine::Openai => Arc::new(RemoteEngine::connect(entry.remote.as_ref().expect("validated"), handle.clone())?),
-        Engine::Mlx => Arc::new(engine::mlx::MlxTts::load(entry, &inst.root, &store.models_dir, use_gpu)?),
+        Engine::Mlx => Arc::new(engine::mlx::MlxTts::load(entry, &inst.root, use_gpu)?),
         Engine::Gguf => Arc::new(engine::gguf::GgufTts::load(entry, &inst.root, use_gpu)?),
         Engine::Whisper | Engine::Chain => anyhow::bail!("{} is not a voice model", entry.id),
     })
@@ -408,11 +408,11 @@ impl Runtime {
                 }).collect();
                 let route = route::Route::lazy(self.lazy_route(model), model.id.clone(), model.label.clone(), model.languages.clone(), None, voices);
                 let (store, child) = (self.store.clone(), model.clone());
-                let (check_store, check_child, use_gpu) = (self.store.clone(), model.clone(), self.use_gpu());
+                let (check_child, use_gpu) = (model.clone(), self.use_gpu());
                 models.push(Arc::new(
                     route
                         .with_installed(Box::new(move || store.locate(&child).is_some()))
-                        .with_unrunnable(Box::new(move || unrunnable_voice(&check_child, &check_store, use_gpu))),
+                        .with_unrunnable(Box::new(move || unrunnable_voice(&check_child, use_gpu))),
                 ));
             }
             let preferred = serde_json::from_value(entry.options.get("language_models").cloned().unwrap_or_else(|| json!({})))?;
@@ -432,7 +432,7 @@ impl Runtime {
             if let Some(error) = entry.option_str("unavailable") {
                 return Some(Err(anyhow::anyhow!("{error}")));
             }
-            if entry.engine == Engine::Mlx && (!use_gpu || engine::mlx::python(&store.models_dir).is_none()) {
+            if entry.engine == Engine::Mlx && (!use_gpu || engine::mlx::worker_path().is_none()) {
                 return None;
             }
             if store.locate(&entry).is_none() {
@@ -453,7 +453,7 @@ impl Runtime {
 
     /// Why `entry` can't run here as configured (see `unrunnable_voice`).
     pub fn unrunnable(&self, entry: &ModelEntry) -> Option<String> {
-        unrunnable_voice(entry, &self.store, self.use_gpu())
+        unrunnable_voice(entry, self.use_gpu())
     }
 
     /// A chain is usable when at least one enabled model is installed and can run here.

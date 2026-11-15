@@ -107,19 +107,20 @@ plugin hands it to the server, which builds a chain (`voicekit-tts-chain`, engin
   models have their 10 languages fixed. Custom GGUF Qwen3-TTS models use a talker and a codec
   file (`ggufModelFile`, `ggufCodecFile`); a Hugging Face lookup downloads only that pair.
 
-Custom MLX Qwen3-TTS models run in a separate MLX Python worker that Voice Kit starts on first use and talks to over stdin and stdout, with no
-listening port. The Python comes from
-`VOICEKIT_MLX_PYTHON`, then `<plugin-data>/runtime/qwen/bin/python` (installed by
-`scripts/install-qwen-runtime.sh`, shipped in native releases as
-`qwen-runtime/install-qwen-runtime.sh`; it needs Apple Silicon, macOS 14 or later and
-Python 3.12, and installs `qwen-build-requirements.txt` and then `qwen-requirements.txt`,
-both locked with SHA-256 hashes). The settings page can run the same installation after
-the user confirms (`voicekit.mlx.status` and `voicekit.mlx.install`); it needs an existing
-Python 3.12, installs only Python packages, and is never started by adding a model or by a
-speech request. Voice Kit never deletes model files it reads from
-outside its own and Paseo's shared model folders. MLX Qwen3-TTS models are added as custom
-models from Hugging Face or a local folder (engine `mlx`, family `qwen3_tts`). Only
-CustomVoice models with the 9 preset voices are supported; Base and VoiceDesign models aren't.
+Custom MLX Qwen3-TTS models run in a separate native Swift worker, launched on first
+use over framed stdin/stdout with no listening port. The Apple Silicon native
+package includes `mlx-runtime/voicekit-mlx-worker`, its Metal library, any Swift
+compatibility dylibs, resource bundles and dependency notices. No Python environment
+or installer is involved. `VOICEKIT_MLX_WORKER` may select another complete native
+bundle for development. The worker requires Apple Silicon and macOS 14 or later.
+`voicekit.mlx.status` only checks bundled files; it never starts a process or loads
+a model. The pinned library is patched to construct tokenizers in memory and never
+write or remove model folders. MLX models are added from Hugging Face or a local
+folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
+9 preset voices are supported; Base and VoiceDesign models aren't.
+The Swift worker seeds each generation with 42; process reuse, bounded requests,
+worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
+and existing model selections are unchanged by the backend migration.
 Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech
 server built from the current source changes the tempo of its generated audio afterwards,
 keeping the pitch (native processing built into the server, with nothing extra to install); a

@@ -6,17 +6,36 @@ use serde_json::{json, Value};
 use super::{SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 
-const WORKER: &str = include_str!("mlx_worker.py");
 const MAX_AUDIO: usize = 24_000 * 2 * 180;
 
-pub fn python(models: &Path) -> Option<PathBuf> {
+fn complete_bundle(worker: &Path) -> bool {
+    let Some(root) = worker.parent() else { return false };
+    if !worker.is_file() || !root.join("mlx.metallib").is_file() { return false; }
+    let manifest = std::fs::read(root.join("runtime.json")).ok()
+        .and_then(|data| serde_json::from_slice::<Value>(&data).ok());
+    manifest.is_some_and(|m| {
+        let Some(files) = m["files"].as_array() else { return false };
+        m["backend"] == "swift-mlx" && m["protocol"] == 1
+            && files.iter().any(|f| f == "voicekit-mlx-worker")
+            && files.iter().any(|f| f == "mlx.metallib")
+            && files.iter().all(|file| file.as_str().is_some_and(|file| {
+                let path = Path::new(file);
+                path.components().all(|p| matches!(p, std::path::Component::Normal(_)))
+                    && root.join(path).is_file()
+            }))
+    })
+}
+
+pub fn worker_path() -> Option<PathBuf> {
     if !cfg!(all(target_os = "macos", target_arch = "aarch64")) { return None; }
-    if let Some(path) = std::env::var_os("VOICEKIT_MLX_PYTHON").map(PathBuf::from) {
-        return path.is_file().then_some(path);
+    if let Some(path) = std::env::var_os("VOICEKIT_MLX_WORKER").map(PathBuf::from) {
+        return complete_bundle(&path).then_some(path);
     }
-    let own = models.parent()?.join("runtime/qwen/bin/python");
-    if own.is_file() { return Some(own); }
-    None
+    let executable = std::env::current_exe().ok()?;
+    let parent = executable.parent()?;
+    [parent.join("mlx-runtime/voicekit-mlx-worker"),
+     parent.parent()?.join("mlx-runtime/voicekit-mlx-worker")]
+        .into_iter().find(|path| complete_bundle(path))
 }
 
 struct Frame { header: Value, pcm: Vec<u8> }
@@ -28,13 +47,13 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(python: &Path, model: &Path) -> anyhow::Result<Self> {
-        // Keep the virtualenv symlink path (canonicalizing Python would bypass its venv).
-        let python = std::path::absolute(python)?;
+    fn spawn(binary: &Path, model: &Path) -> anyhow::Result<Self> {
+        let binary = std::path::absolute(binary)?;
         let model = std::path::absolute(model)?;
-        let mut child = Command::new(&python).args(["-I", "-u", "-c", WORKER]).arg(&model).current_dir(&model)
+        let root = binary.parent().context("MLX worker parent")?;
+        let mut child = Command::new(&binary).arg(&model).current_dir(root)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit())
-            .spawn().context("start MLX speech worker")?;
+            .spawn().context("start native MLX speech worker")?;
         let input = child.stdin.take().context("MLX stdin")?;
         let mut output = child.stdout.take().context("MLX stdout")?;
         let (tx, rx) = mpsc::sync_channel(2);
@@ -55,7 +74,7 @@ impl Worker {
         });
         let worker = Self { child, input: Some(input), output: rx };
         let ready = worker.receive(Duration::from_secs(30))?;
-        ensure!(ready.header["event"] == "ready" && ready.header["device"] == "metal", "MLX GPU worker did not become ready");
+        ensure!(ready.header["event"] == "ready" && ready.header["device"] == "metal" && ready.header["backend"] == "swift-mlx" && ready.header["protocol"] == 1, "MLX GPU worker did not become ready");
         tracing::info!(device = "metal", model_size = %ready.header["model_size"], quantization_bits = %ready.header["quantization_bits"], "MLX model ready");
         Ok(worker)
     }
@@ -91,7 +110,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.input.take(); // EOF lets the idle worker release MLX / Python resources cleanly.
+        self.input.take(); // EOF lets the idle worker release MLX resources cleanly.
         for _ in 0..50 {
             if self.child.try_wait().ok().flatten().is_some() { return; }
             std::thread::sleep(Duration::from_millis(10));
@@ -101,14 +120,14 @@ impl Drop for Worker {
     }
 }
 
-pub struct MlxTts { worker: Mutex<Option<Worker>>, voices: Vec<Voice>, default_voice: String, python: PathBuf, model: PathBuf, running: AtomicBool, failure: Mutex<Option<(String, Instant)>>, failures: AtomicU32 }
+pub struct MlxTts { worker: Mutex<Option<Worker>>, voices: Vec<Voice>, default_voice: String, binary: PathBuf, model: PathBuf, running: AtomicBool, failure: Mutex<Option<(String, Instant)>>, failures: AtomicU32 }
 
 impl MlxTts {
-    pub fn load(entry: &ModelEntry, root: &Path, models: &Path, use_gpu: bool) -> anyhow::Result<Self> {
+    pub fn load(entry: &ModelEntry, root: &Path, use_gpu: bool) -> anyhow::Result<Self> {
         ensure!(use_gpu, "Qwen3-TTS MLX requires GPU acceleration");
-        let python = python(models).context("MLX runtime missing; run scripts/install-qwen-runtime.sh on Apple Silicon")?;
+        let binary = worker_path().context("The native MLX worker is missing from this speech server installation")?;
         let voices = entry.voices.iter().map(|v| Voice { id:v.id.clone(), label:v.label.clone(), language:v.language.clone(), gender:v.gender.clone(), featured:v.featured }).collect();
-        Ok(Self { worker: Mutex::new(None), voices, default_voice: entry.default_voice.clone().unwrap_or_else(|| "vivian".into()), python, model: root.to_path_buf(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) })
+        Ok(Self { worker: Mutex::new(None), voices, default_voice: entry.default_voice.clone().unwrap_or_else(|| "vivian".into()), binary, model: root.to_path_buf(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) })
     }
 }
 
@@ -116,7 +135,7 @@ impl TtsEngine for MlxTts {
     fn prepare(&self) -> anyhow::Result<()> {
         let mut worker = self.worker.lock().unwrap_or_else(|p| p.into_inner());
         if worker.is_none() {
-            *worker = Some(Worker::spawn(&self.python, &self.model)?);
+            *worker = Some(Worker::spawn(&self.binary, &self.model)?);
             self.running.store(true, Ordering::SeqCst);
         }
         Ok(())
@@ -138,7 +157,7 @@ impl TtsEngine for MlxTts {
         let deadline = Instant::now() + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
         let result = (|| -> anyhow::Result<Pcm> {
             if worker.is_none() {
-                let loaded = timings.time("mlx_load", || Worker::spawn(&self.python, &self.model))?;
+                let loaded = timings.time("mlx_load", || Worker::spawn(&self.binary, &self.model))?;
                 tracing::info!(accelerator = "metal", pid = loaded.child.id(), "loaded MLX speech worker");
                 *worker = Some(loaded);
                 self.running.store(true, Ordering::SeqCst);
@@ -170,7 +189,7 @@ impl TtsEngine for MlxTts {
         let delay = Duration::from_secs(60) * 2u32.pow(self.failures.load(Ordering::SeqCst).saturating_sub(1).min(5));
         if !self.failure.lock().unwrap().as_ref().is_some_and(|(_, at)| at.elapsed() >= delay) { return; }
         let Ok(mut worker) = self.worker.try_lock() else { return };
-        match Worker::spawn(&self.python, &self.model) {
+        match Worker::spawn(&self.binary, &self.model) {
             Ok(loaded) => {
                 *worker = Some(loaded); self.running.store(true, Ordering::SeqCst); self.failure.lock().unwrap().take(); self.failures.store(0, Ordering::SeqCst);
             }
@@ -203,8 +222,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundle_probe_rejects_missing_resources_and_invalid_manifests() {
+        let folder = std::env::temp_dir().join(format!("voicekit-mlx-bundle-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&folder).unwrap();
+        let worker = folder.join("voicekit-mlx-worker");
+        std::fs::write(&worker, []).unwrap();
+        assert!(!complete_bundle(&worker));
+        let manifest = json!({"backend":"swift-mlx","protocol":1,"files":["voicekit-mlx-worker","mlx.metallib","compat.dylib"]});
+        std::fs::write(folder.join("runtime.json"), manifest.to_string()).unwrap();
+        std::fs::write(folder.join("mlx.metallib"), []).unwrap();
+        assert!(!complete_bundle(&worker));
+        std::fs::write(folder.join("compat.dylib"), []).unwrap();
+        assert!(complete_bundle(&worker));
+        std::fs::write(folder.join("runtime.json"), manifest.to_string().replace("compat.dylib", "../outside")).unwrap();
+        assert!(!complete_bundle(&worker));
+        std::fs::write(folder.join("runtime.json"), "{}").unwrap();
+        assert!(!complete_bundle(&worker));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
     fn standalone_failure_is_reported_and_retries_back_off() {
-        let engine = MlxTts { worker: Mutex::new(None), voices: vec![], default_voice: "vivian".into(), python: PathBuf::from("/nonexistent/voicekit-python"), model: std::env::temp_dir(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) };
+        let engine = MlxTts { worker: Mutex::new(None), voices: vec![], default_voice: "vivian".into(), binary: PathBuf::from("/nonexistent/voicekit-mlx-worker"), model: std::env::temp_dir(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) };
         assert!(engine.synthesize(SpeakRequest { text: "hello", voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default()).is_err());
         assert!(engine.failure().is_some());
         assert!(engine.synthesize(SpeakRequest { text: "again", voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default()).is_err());

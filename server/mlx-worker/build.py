@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build the experimental native worker with pinned dependencies and its small fix."""
+"""Build the native worker with pinned dependencies and tracked compatibility fixes."""
 import argparse
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import time
 
@@ -35,14 +36,17 @@ def build(args):
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, timeout=5).decode().strip()
     if revision != REVISION:
         raise RuntimeError("Unexpected upstream revision; review the patch before updating")
-    patch = ROOT / "patches/respect-requested-token-limit.patch"
-    applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
-                             cwd=checkout, capture_output=True, timeout=5).returncode == 0
-    if not applied:
-        run(["git", "apply", "--check", str(patch)], deadline, checkout)
-        run(["git", "apply", str(patch)], deadline, checkout)
+    for name in ["respect-requested-token-limit.patch", "read-only-model-loading.patch"]:
+        patch = ROOT / "patches" / name
+        applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)],
+                                 cwd=checkout, capture_output=True, timeout=5).returncode == 0
+        if not applied:
+            run(["git", "apply", "--check", str(patch)], deadline, checkout)
+            run(["git", "apply", str(patch)], deadline, checkout)
     run(["swift", "build", "--package-path", str(ROOT), "--disable-automatic-resolution",
          "-c", "release", "--product", "voicekit-mlx-worker", "-j", str(args.jobs)], deadline)
+    products = ROOT / ".build/release"
+    shutil.copy2(products / "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib", products / "mlx.metallib")
 
 
 if __name__ == "__main__":

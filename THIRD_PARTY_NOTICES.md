@@ -65,3 +65,12 @@ The sample selects 15 distinct sentences per language from the pinned test
 split; model error rates and timings are derived measurements. Evaluation audio
 was peak-normalized before transcription and is not included in this repository.
 See [`docs/eval.md`](docs/eval.md) for the revision, preprocessing and methods.
+
+## Bundled native MLX helper (Apple Silicon)
+
+Apple Silicon native packages include a Swift MLX helper. Its pinned Swift package
+inventory, original upstream notices (including nested dependencies), Swift runtime
+license and Voice Kit source patches are under `mlx-runtime/notices/`. The patches
+respect the requested token budget and make model loading read-only. Any bundled
+Swift compatibility dylibs are covered by the included Swift Apache 2.0 license
+with runtime exception. Model weights remain separate from the software archive.

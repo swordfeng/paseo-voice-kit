@@ -1,65 +1,44 @@
-# Native MLX worker experiment
+# Native MLX speech worker
 
-This standalone macOS executable evaluates Qwen3-TTS CustomVoice using
-`mlx-audio-swift` at an immutable revision. It is not selected by the production
-Rust engine or installed by Voice Kit. Production MLX requests still use Python.
+Voice Kit uses this persistent Swift executable for Qwen3-TTS CustomVoice on
+Apple Silicon with macOS 14 or later. Rust launches it on first use, exchanges
+framed JSON/PCM over stdio, and owns timeout, retry and unload behavior. There is
+no Python inference process or runtime installation step.
 
-Build on Apple Silicon with Xcode (including its Metal Toolchain):
-
-```sh
-python3 server/mlx-worker/build.py
-```
-
-Keep the complete build product directory when running the executable: MLX also
-needs the generated Metal resource bundle. `Package.resolved` pins transitive
-Swift dependencies.
-
-The build helper applies the tracked token-limit patch to the pinned audio
-library, verifies its revision, and enforces a build deadline. Running SwiftPM
-directly on a fresh checkout skips this patch. The patch makes Qwen respect the
-caller's token budget instead of silently reducing it for short inputs.
-
-Pass a **disposable, private copy** of a compatible MLX CustomVoice model folder:
+Build and stage the complete payload with Xcode / Swift 6.2 or later and its
+Metal Toolchain:
 
 ```sh
-cp -cR /path/to/model /private/tmp/voicekit-mlx-model-copy
-server/mlx-worker/.build/release/voicekit-mlx-worker /private/tmp/voicekit-mlx-model-copy
+python3 scripts/build-mlx-worker.py --target-dir server/target/release
 ```
 
-The upstream loader can write tokenizer files and has a cache-cleanup branch.
-Never point this experiment at the user's only copy of their model. The worker
-also rejects a missing or malformed speech-tokenizer directory before loading.
-It loads local weights, requires the MLX GPU device, and preserves the existing
-framed-stdio protocol; upstream console output goes to stderr. Requests are
-newline-delimited JSON with `text`, `voice` and `language` fields. EOF exits the
-process and releases its model and Metal allocations.
+Python is a developer build/test tool here. The resulting `mlx-runtime` folder
+contains the executable, explicit `mlx.metallib`, Swift compatibility dylibs when
+needed, resource bundles, an inventory manifest and dependency notices. Its
+non-system dylib references are made relative and development-toolchain rpaths
+are removed. Distribute the complete folder beside `voicekit`; the release and
+development installers do this automatically. Users install nothing separately.
 
-This is a feasibility experiment, not a production replacement. Packaging,
-minimum-OS compatibility, license bundling, Rust worker selection, application
-latency and the existing Python setup flow have not been migrated. Generation
-must emit the configured speech-end token; token-cap truncation is an error.
-The upstream implementation has different generation internals from Python, so
-matching sampling parameters do not imply identical audio.
+The build verifies the pinned upstream revision, applies the tracked patches
+idempotently, and respects a build deadline. `Package.resolved` pins transitive
+Swift dependencies. The patches honor the caller's token budget and construct
+tokenizers in memory; model directories are read-only and are never removed.
+The worker accepts only CustomVoice checkpoints with the nine preset speakers.
+Generation uses seed 42 by default and must emit EOS; budget exhaustion is an
+error. Upstream console output goes to stderr, preserving framed stdout.
 
-Run the bounded stdio smoke test against the private model copy:
+Run the bounded native protocol or HTTP check using already-downloaded weights:
 
 ```sh
-python3 server/mlx-worker/smoke.py swift --model /private/tmp/voicekit-mlx-model-copy --output /private/tmp/voicekit-swift-smoke
-python3 server/mlx-worker/smoke.py python --python /path/to/venv/bin/python --model /private/tmp/voicekit-mlx-model-copy --output /private/tmp/voicekit-python-smoke
+python3 server/mlx-worker/smoke.py --binary server/target/release/mlx-runtime/voicekit-mlx-worker --model /path/to/model --output /private/tmp/voicekit-mlx-stdio
+python3 scripts/smoke-mlx-models.py --exe server/target/release/voicekit --model /path/to/model --reuse-dir /path/to/existing/asr/models --output /private/tmp/voicekit-mlx-http
 ```
 
-The run has bounded load, request and exit deadlines. Failure terminates only the
-owned worker process group. It saves WAVs, stderr and a JSON report. Transcribe or
-listen to the saved WAVs separately: successful framing alone does not establish
-correct speech. `--language zh` selects the short Chinese test alone.
+These checks never install into Paseo or change its settings. See
+[docs/eval.md](../../docs/eval.md) for budgets, coverage, results and limitations.
 
-`VOICEKIT_MLX_PROFILE=1` enables text-free token/audio timing on stderr.
-`VOICEKIT_MLX_SEED=42` fixes the worker's random state for controlled tests; the
-upstream Qwen path does not forward `GenerateParameters.seed` itself. Neither
-setting changes the existing production Python engine.
-
-`diagnostics/metal-compile-timers.patch` is an optional, non-production probe for
-the MLX C++ submodule. The normal build helper does not apply it. See the
-evaluation notes for the controlled cold-source experiment and its limitations.
-
-Measurements and validation results belong in [docs/eval.md](../../docs/eval.md).
+`VOICEKIT_MLX_PROFILE=1` records text-free timing on stderr.
+`VOICEKIT_MLX_SEED` overrides the per-request seed for controlled diagnostics.
+`diagnostics/metal-compile-timers.patch` is an optional probe for the MLX C++
+submodule; the normal build does not apply it. It can intentionally create cold
+source-cache entries and is not part of the distributed runtime.

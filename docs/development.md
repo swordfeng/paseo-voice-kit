@@ -143,7 +143,10 @@ node scripts/release-manifest.mjs v0.1.0
 Releases are published from `swordfeng/paseo-voice-kit`. CI uses supported macOS 15 ARM
 and Intel runners, asserts the architecture, and builds the Linux/Windows variants. Every
 platform ships a `.tar.gz` archive with its executable and license notices; Linux and
-Windows also include the ggml backend libraries.
+Windows also include the ggml backend libraries. Apple Silicon archives also include
+the native Swift MLX helper, its Metal resources, compatibility libraries and notices.
+Build it with `python3 scripts/build-mlx-worker.py --target-dir server/target/release`;
+no Python environment is required on the end-user machine.
 
 Before packaging a local build, collect the notices from its Cargo metadata:
 
@@ -158,7 +161,7 @@ Rust dependency inventory, upstream native notices and unmodified MPL-covered
 crate sources. `scripts/release-manifest.mjs` pins the published assets after a
 successful release.
 
-The first managed runtime download requires an affirmative installation choice.
+The first managed speech-server download requires an affirmative installation choice.
 Already-installed, custom and local development binaries need no additional
 confirmation. Declining retains Paseo's fallback and installs no runtime.
 Model weights remain separate downloads controlled by the model-download setting.

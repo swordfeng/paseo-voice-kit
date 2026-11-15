@@ -53,16 +53,9 @@ def rss(process):
 
 
 def run(args):
-    repo = Path(__file__).resolve().parents[2]
-    if args.backend == "swift":
-        command = [str(args.binary.resolve()), str(args.model.resolve())]
-    else:
-        # Preserve the venv launcher path; resolving its symlink loses pyvenv.cfg.
-        command = [str(args.python.absolute()), "-I", "-u", "-c",
-                   (repo / "server/src/engine/mlx_worker.py").read_text(),
-                   str(args.model.resolve())]
+    command = [str(args.binary.resolve()), str(args.model.resolve())]
     args.output.mkdir(parents=True, exist_ok=True)
-    result = {"backend": args.backend, "model": args.model.name, "requests": []}
+    result = {"backend": "swift-mlx", "model": args.model.name, "requests": []}
     process = None
     try:
         with (args.output / "worker.log").open("wb") as log:
@@ -138,14 +131,10 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("backend", choices=["swift", "python"])
     parser.add_argument("--model", type=Path, required=True, help="private, disposable model copy")
     parser.add_argument("--binary", type=Path, default=Path(__file__).parent / ".build/release/voicekit-mlx-worker")
-    parser.add_argument("--python", type=Path, help="existing private mlx-audio Python interpreter")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--single", action="store_true", help="English only")
     parser.add_argument("--language", choices=["en", "zh"], help="test one language only")
     args = parser.parse_args()
-    if args.backend == "python" and args.python is None:
-        parser.error("--python is required for the Python baseline")
     run(args)

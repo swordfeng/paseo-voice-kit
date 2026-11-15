@@ -42,6 +42,9 @@ QWEN_FLAG=""
 case "$OS" in Darwin) ;; *) if [[ "$CARGO_FEATURES" == *vulkan* ]]; then QWEN_FLAG=--vulkan; fi ;; esac
 # macOS ships Bash 3.2, where an empty array trips `set -u`.
 python3 "$ROOT/scripts/build-qwen-worker.py" --target-dir "$TARGET" ${QWEN_FLAG:+"$QWEN_FLAG"}
+if [ "$BUILD_KEY" = darwin-arm64 ]; then
+  python3 "$ROOT/scripts/build-mlx-worker.py" --target-dir "$TARGET"
+fi
 mkdir -p "$DEST"
 EXE=voicekit
 case "$OS" in MINGW*|MSYS*|CYGWIN*) EXE=voicekit.exe ;; esac
@@ -61,13 +64,12 @@ cp -R "$TARGET/gguf-runtime/." "$stage/"
 if [ -d "$DEST/gguf-runtime" ]; then mv "$DEST/gguf-runtime" "$DEST/gguf-runtime.rollback.$(date +%s)"; fi
 mv "$stage" "$DEST/gguf-runtime"
 if [ "$BUILD_KEY" = darwin-arm64 ]; then
-  stage="$(mktemp -d "$DEST/.qwen-runtime.XXXXXX")"
-  for file in install-qwen-runtime.sh qwen-build-requirements.txt qwen-requirements.txt; do
-    cp "$ROOT/scripts/$file" "$stage/$file"
-  done
-  if [ -d "$DEST/qwen-runtime" ]; then mv "$DEST/qwen-runtime" "$DEST/qwen-runtime.rollback.$(date +%s)"; fi
-  mv "$stage" "$DEST/qwen-runtime"
+  stage="$(mktemp -d "$DEST/.mlx-runtime.XXXXXX")"
+  cp -R "$TARGET/mlx-runtime/." "$stage/"
+  if [ -d "$DEST/mlx-runtime" ]; then mv "$DEST/mlx-runtime" "$DEST/mlx-runtime.rollback.$(date +%s)"; fi
+  mv "$stage" "$DEST/mlx-runtime"
 fi
+if [ -f "$DEST/$EXE" ]; then cp "$DEST/$EXE" "$DEST/$EXE.rollback.$(date +%s)"; fi
 install_file "$TARGET/$EXE"
 chmod +x "$DEST/$EXE"
 echo "installed $DEST/$EXE ($("$DEST/$EXE" --version))"

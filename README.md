@@ -75,23 +75,15 @@ the plugin with `node scripts/rpc.mjs voicekit.status`.
 
 ### MLX voice models (optional, Apple Silicon)
 
-Only Qwen3-TTS models you add for MLX use Python. The built-in voices (Supertonic 3 and the
-GGUF Qwen3-TTS models) run in Voice Kit's own native programs and need none. MLX models run
-in a separate Python environment with MLX, which needs a Mac with Apple Silicon, macOS 14 or
-later and Python 3.12 already installed.
+Qwen3-TTS MLX models use a native Swift helper bundled with the Apple Silicon speech
+server. They need macOS 14 or later; there is no separate Python, virtual environment
+or package installation. Model weights are still downloaded separately, following
+"Download models automatically", or read from a local model folder. Models load on
+first use and release their worker when unloaded.
 
-Voice Kit installs that environment only when you ask. When you add an MLX model, and on its
-card until the environment exists, "Install MLX runtime…" explains what it will do and asks
-first. It uses your Python 3.12 (`VOICEKIT_SETUP_PYTHON` on the daemon picks a specific one)
-and installs mlx, mlx-audio and their dependencies from PyPI, from two SHA-256-locked
-requirement files (build tools first, then the runtime), into Voice Kit's plugin data. It
-doesn't install Python itself. Model weights are separate: an enabled MLX model downloads
-them as usual, following "Download models automatically". Adding a model never installs the
-environment.
-
-You can also run `scripts/install-qwen-runtime.sh` yourself (native releases include it as
-`qwen-runtime/install-qwen-runtime.sh`), or point `VOICEKIT_MLX_PYTHON` at an existing
-compatible Python; Voice Kit then leaves that Python alone.
+This is in the current source and local development build. The published 0.1.0
+speech server does not include the helper; the plugin reports when a server update
+is needed. Only Qwen3-TTS CustomVoice checkpoints with the preset voices are supported.
 
 With a speech server built from the current source, Qwen3-TTS voices (GGUF and MLX) follow the
 Speed setting too: Voice Kit changes the speed of the generated speech afterwards, keeping its

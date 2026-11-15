@@ -1,0 +1,103 @@
+diff --git a/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift b/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
+index 79e73a6..d7eaa09 100644
+--- a/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
++++ b/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import HuggingFace
++import struct Hub.Config
+ @preconcurrency import MLX
+ @preconcurrency import MLXAudioCore
+ import MLXNN
+@@ -1182,36 +1183,29 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
+         try model.talker.update(parameters: ModuleParameters.unflattened(talkerPairs), verify: .all)
+         eval(model.talker.parameters())
+ 
+-        // Generate tokenizer.json if missing (Qwen3-TTS ships without it)
++        // Construct the tokenizer in memory. Installed/custom model folders are read-only.
++        let tokenizerConfigPath = modelDir.appendingPathComponent("tokenizer_config.json")
++        let configObject = try JSONSerialization.jsonObject(with: Data(contentsOf: tokenizerConfigPath))
++        guard let tokenizerConfig = configObject as? [NSString: Any] else {
++            throw AudioGenerationError.modelNotInitialized("Invalid tokenizer configuration")
++        }
+         let tokenizerJsonPath = modelDir.appendingPathComponent("tokenizer.json")
+-        if !fm.fileExists(atPath: tokenizerJsonPath.path) {
+-            let vocabPath = modelDir.appendingPathComponent("vocab.json")
+-            let mergesPath = modelDir.appendingPathComponent("merges.txt")
+-            let hasVocab = fm.fileExists(atPath: vocabPath.path)
+-            let hasMerges = fm.fileExists(atPath: mergesPath.path)
+-            if hasVocab, hasMerges {
+-                do {
+-                    try generateTokenizerJson(
+-                        vocabPath: vocabPath,
+-                        mergesPath: mergesPath,
+-                        tokenizerConfigPath: modelDir.appendingPathComponent("tokenizer_config.json"),
+-                        outputPath: tokenizerJsonPath
+-                    )
+-                    print("Generated tokenizer.json from vocab.json + merges.txt")
+-                } catch {
+-                    print("Warning: Failed to generate tokenizer.json: \(error)")
+-                }
+-            } else {
+-                print("Warning: Cannot generate tokenizer.json — vocab.json: \(hasVocab), merges.txt: \(hasMerges)")
+-            }
++        let tokenizerData: Data
++        if fm.fileExists(atPath: tokenizerJsonPath.path) {
++            tokenizerData = try Data(contentsOf: tokenizerJsonPath)
++        } else {
++            tokenizerData = try generateTokenizerJson(
++                vocabPath: modelDir.appendingPathComponent("vocab.json"),
++                mergesPath: modelDir.appendingPathComponent("merges.txt"),
++                tokenizerConfigPath: tokenizerConfigPath
++            )
+         }
+-
+-        // Load tokenizer
+-        do {
+-            model.tokenizer = try await AutoTokenizer.from(modelFolder: modelDir)
+-        } catch {
+-            print("Warning: Could not load tokenizer: \(error)")
++        guard let tokenizerObject = try JSONSerialization.jsonObject(with: tokenizerData) as? [NSString: Any] else {
++            throw AudioGenerationError.modelNotInitialized("Invalid tokenizer data")
+         }
++        model.tokenizer = try AutoTokenizer.from(
++            tokenizerConfig: Config(tokenizerConfig), tokenizerData: Config(tokenizerObject)
++        )
+ 
+         // Load speech tokenizer — check that it's a directory, not a stale file
+         let speechTokenizerPath = modelDir.appendingPathComponent("speech_tokenizer")
+@@ -1219,12 +1213,8 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
+         if fm.fileExists(atPath: speechTokenizerPath.path, isDirectory: &isDir), isDir.boolValue {
+             try loadSpeechTokenizer(model: model, path: speechTokenizerPath)
+         } else if fm.fileExists(atPath: speechTokenizerPath.path) {
+-            // speech_tokenizer exists but is not a directory — stale cache
+-            // Remove the entire model cache so it re-downloads cleanly next time
+-            print("speech_tokenizer is not a directory (stale cache), clearing model cache...")
+-            try? fm.removeItem(at: modelDir)
+             throw AudioGenerationError.modelNotInitialized(
+-                "Model cache was corrupted (speech_tokenizer). It has been cleared. Please try loading again."
++                "Model speech_tokenizer must be a directory. The model was not modified."
+             )
+         } else {
+             print("Warning: speech_tokenizer directory not found, speech decoding unavailable")
+@@ -1292,9 +1282,8 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
+     private static func generateTokenizerJson(
+         vocabPath: URL,
+         mergesPath: URL,
+-        tokenizerConfigPath: URL,
+-        outputPath: URL
+-    ) throws {
++        tokenizerConfigPath: URL
++    ) throws -> Data {
+         // Read vocab
+         let vocabData = try Data(contentsOf: vocabPath)
+         let vocabDict = try JSONSerialization.jsonObject(with: vocabData) as? [String: Int] ?? [:]
+@@ -1374,7 +1363,6 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
+             ] as [String: Any]
+         ]
+ 
+-        let jsonData = try JSONSerialization.data(withJSONObject: tokenizerJson, options: [.sortedKeys])
+-        try jsonData.write(to: outputPath)
++        return try JSONSerialization.data(withJSONObject: tokenizerJson, options: [.sortedKeys])
+     }
+ }

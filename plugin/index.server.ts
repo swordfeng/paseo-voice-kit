@@ -13,7 +13,6 @@ import {
   statusRpc,
   voicesRpc,
   mlxRuntimeRpc,
-  installMlxRuntimeRpc,
   type Engine,
   type Reason,
   type Model,
@@ -34,7 +33,7 @@ import { Supervisor, type ServerConfig, type SupervisorSnapshot } from "./server
 import { voicekit, voicekitJson } from "./server/voicekit-api";
 import { writeCustomCatalog } from "./server/custom-models";
 import { lookup as hfLookup } from "./server/huggingface";
-import { MlxRuntimeInstaller } from "./server/mlx-runtime";
+import { MlxRuntimeMonitor } from "./server/mlx-runtime";
 import { featurePhase } from "./server/feature-phase";
 
 /**
@@ -134,15 +133,9 @@ export default function contribute(server: PluginServerContext) {
   const supervisor = new Supervisor((snap) => publish(snap));
   const memory = new MemorySampler();
   const listeningDefault = new DefaultSttModel();
-  const mlxRuntime = new MlxRuntimeInstaller({
+  const mlxRuntime = new MlxRuntimeMonitor({
     binary: () => supervisor.state.binary?.path ?? null,
-    installed: () => {
-      // Drop any failed-worker cooldown by reapplying the current settings, without changing them.
-      const revision = prefsRevision;
-      if (!stopped) void settings.read().then(current => {
-        if (!stopped && revision === prefsRevision && current.status === "ready") return applyPrefs(current.values, true);
-      }).catch(error => supervisor.note(`[voice-kit] MLX setup completed; speech server refresh failed: ${String(error)}`));
-    },
+
   });
   let defaultSttModel: string | null = null;
   const sharedModels = new PaseoModels({
@@ -264,7 +257,6 @@ export default function contribute(server: PluginServerContext) {
   });
 
   server.handle(mlxRuntimeRpc, async () => mlxRuntime.status());
-  server.handle(installMlxRuntimeRpc, async ({ confirmed }) => mlxRuntime.install(confirmed));
 
   server.handle(statusRpc, async (_input, context): Promise<Status> => {
     await withSession(context);
@@ -396,7 +388,6 @@ export default function contribute(server: PluginServerContext) {
     if (defaultRetry) clearTimeout(defaultRetry);
     clearInterval(sweep);
     unsubscribe();
-    await mlxRuntime.dispose();
     await sharedModels.dispose();
     await ready;
     await pendingPrefs.catch(() => undefined);
