@@ -59,6 +59,21 @@ function withoutKey(site: RawSite): RawSite {
   return rest;
 }
 
+/**
+ * A site written by some Voice Kit server: its per-start `vk_` token on a loopback `/v1` address.
+ * Such a value is never the user's own setting, even when Voice Kit's state no longer records it
+ * (the state file was lost or damaged), so it is never saved as the setting to restore.
+ */
+export function isVoiceKitSite(site: RawSite | null | undefined): boolean {
+  return (
+    site?.provider === "openai" &&
+    typeof site.apiKey === "string" &&
+    site.apiKey.startsWith("vk_") &&
+    typeof site.baseUrl === "string" &&
+    /^http:\/\/127\.0\.0\.1:\d+\/v1$/.test(site.baseUrl)
+  );
+}
+
 /** The user's previous site, or Paseo's built-in local engine when there was none. */
 function restoreValue(previous: RawSite | null | undefined): Record<string, unknown> {
   return previous && typeof previous.provider === "string" ? { ...previous } : { provider: "local" };
@@ -191,13 +206,14 @@ export class SpeechSwitch {
         delete managed.pending;
         dirty = true;
       }
-      // Model or voice changed in Settings > Voice, still on Voice Kit's server. Judged only after
-      // Paseo accepted Voice Kit's own write, so a failed write is not taken for a user edit.
+      // Model changed in Settings > Voice, still on Voice Kit's server. Judged only after Paseo
+      // accepted Voice Kit's own write, so a failed write is not taken for a user edit. Voices are
+      // chosen per model in Voice Kit, so a voice changed there is not a takeover.
       const edited =
         !!managed &&
         pointsHere &&
         (managed.applied !== false || externalPendingEdit) &&
-        (current?.model !== managed.model || (managed.voice !== undefined && current?.voice !== managed.voice));
+        current?.model !== managed.model;
       const ours = pointsHere && !edited && !externalPendingEdit;
 
       if (managed && !ours && !pendingTakeover) {
@@ -271,16 +287,18 @@ export class SpeechSwitch {
 
       if (want && desired && model && desired.baseUrl) {
         const voice = site === "voiceOutput" ? desired.voice : undefined;
+        // The voice Paseo sends is ignored (each model has its own), so a different one there is
+        // left alone rather than rewritten.
         const upToDate =
           ours &&
           current?.model === model &&
           current?.baseUrl === desired.baseUrl &&
-          current?.apiKey === desired.token &&
-          (voice === undefined || current?.voice === voice);
+          current?.apiKey === desired.token;
         if (!ours) {
           // Remember the user's own configuration exactly before taking the site over (never a
-          // site that already points at Voice Kit: its earlier setting is kept from before).
-          if (!atUrl(desired.baseUrl)) this.state.previous[site] = current;
+          // site that already points at Voice Kit: its earlier setting is kept from before, or,
+          // if Voice Kit's state was lost, is unknown and restores Paseo's built-in speech).
+          if (!atUrl(desired.baseUrl) && !isVoiceKitSite(current)) this.state.previous[site] = current;
           switchingIn = true;
         }
         if (!upToDate) {
@@ -318,6 +336,10 @@ export class SpeechSwitch {
         delete this.state.managed[site];
         delete this.state.previous[site];
         dirty = true;
+      } else if (!managed && !override && isVoiceKitSite(current)) {
+        // Left pointing at a Voice Kit server that no record owns (state lost): it can't work
+        // with a stale token, and the user's earlier setting is unknown.
+        setSite(patch, site, restorePatch(null, current));
       }
 
       if (locked) statuses.push({ site, state: "locked", model: null, detail: `Set by ${locked} on the Paseo daemon`, reason: { code: "lockedByEnv", variable: locked } });

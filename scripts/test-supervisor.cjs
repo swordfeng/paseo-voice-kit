@@ -19,7 +19,7 @@ const sdk = {
   execCommand: async (_command, args) => {
     if (args?.includes('--version')) {
       if (gate) await gate;
-      return { stdout: 'voicekit 0.1.0', stderr: '' };
+      return { stdout: 'voicekit ' + (sdk.reportedVersion ?? require(root + '/plugin/shared/release.ts').SERVER_VERSION), stderr: '' };
     }
     return { stdout: '', stderr: '' };
   },
@@ -58,21 +58,33 @@ Module._load = function (name, ...args) {
   return originalLoad.call(this, name, ...args);
 };
 (async () => {
-  const { RELEASE, platformKey } = require(root + '/plugin/shared/release.ts');
-  const { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired } = require(root + '/plugin/server/binary.ts');
+  const { RELEASE, SERVER_VERSION, platformKey } = require(root + '/plugin/shared/release.ts');
+  const { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired, ServerVersionMismatch } = require(root + '/plugin/server/binary.ts');
+  const cargoVersion = /^version = "([^"]+)"/m.exec(fs.readFileSync(path.join(root, 'server/Cargo.toml'), 'utf8'))[1];
+  assert.equal(SERVER_VERSION, cargoVersion, 'plugin SERVER_VERSION matches server/Cargo.toml');
+  console.log('PASS the plugin names the server version it is built with');
+  const pinnedVersion = RELEASE.version;
+  RELEASE.version = SERVER_VERSION;
   const { paths, EXE } = require(root + '/plugin/server/paths.ts');
-  const bytes = Buffer.from('#!/bin/sh\necho voicekit 0.1.0\n');
+  const bytes = Buffer.from('#!/bin/sh\necho voicekit ' + SERVER_VERSION + '\n');
   const packaged = archive('voicekit-fixture/' + EXE, bytes);
   const url = 'https://example.invalid/voicekit';
-  RELEASE.assets[platformKey(process.platform, process.arch)] = { url, exe: 'voicekit-fixture/' + EXE, sha256: createHash('sha256').update(packaged).digest('hex') };
+  const approved = createHash('sha256').update(packaged).digest('hex');
+  RELEASE.assets[platformKey(process.platform, process.arch)] = { url, exe: 'voicekit-fixture/' + EXE, sha256: approved };
   const oldFetch = global.fetch;
   let requests = 0;
   global.fetch = async (source) => { assert.equal(source, url); requests++; return new Response(packaged); };
   try {
-    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), RuntimeDownloadRequired);
-    assert.equal(requests, 0, 'no request before consent');
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), (e) => e instanceof RuntimeDownloadRequired && e.sha256 === approved && e.version === SERVER_VERSION);
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal, 'f'.repeat(64)), RuntimeDownloadRequired);
+    assert.equal(requests, 0, 'no request before consent, nor with consent for another archive');
+    RELEASE.version = pinnedVersion === SERVER_VERSION ? '0.0.0-other' : pinnedVersion;
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal, approved), (e) => e instanceof ServerVersionMismatch && e.source === 'release');
+    assert.equal(requests, 0, 'a pinned release of another version is never downloaded');
+    RELEASE.version = SERVER_VERSION;
+    console.log('PASS approval covers one archive; a release of another version is refused before download');
     const denied = resolveBinary('', () => {}, new AbortController().signal);
-    const accepted = resolveBinary('', () => {}, new AbortController().signal, true);
+    const accepted = resolveBinary('', () => {}, new AbortController().signal, approved);
     await assert.rejects(denied, RuntimeDownloadRequired);
     await accepted;
     assert.equal(requests, 1);
@@ -83,11 +95,11 @@ Module._load = function (name, ...args) {
     let releaseFetch;
     const owner = new AbortController(), oldWait = new AbortController();
     global.fetch = async () => { requests++; await new Promise(r => { releaseFetch = r; }); return new Response(packaged); };
-    const old = resolveBinary('', () => {}, owner.signal, true, oldWait.signal);
+    const old = resolveBinary('', () => {}, owner.signal, approved, oldWait.signal);
     await until(() => !!releaseFetch);
     oldWait.abort(); await assert.rejects(old, { name: 'AbortError' });
     let progress = 0;
-    const latest = resolveBinary('', () => progress++, owner.signal, true, new AbortController().signal);
+    const latest = resolveBinary('', () => progress++, owner.signal, approved, new AbortController().signal);
     releaseFetch(); await latest;
     assert.equal(requests, 2, 'settings cancellation reuses the single in-flight archive');
     assert(progress > 0, 'the new waiter receives install progress');
@@ -96,23 +108,46 @@ Module._load = function (name, ...args) {
     fs.rmSync(path.join(paths.bin, RELEASE.version), { recursive: true });
     const cancelled = new AbortController(); let streamCancelled = false;
     global.fetch = async () => new Response(new ReadableStream({ start(c) { c.enqueue(packaged.subarray(0, 16)); }, cancel() { streamCancelled = true; } }));
-    const unfinished = resolveBinary('', () => {}, cancelled.signal, true);
+    const unfinished = resolveBinary('', () => {}, cancelled.signal, approved);
     await until(() => fs.existsSync(path.join(paths.bin, RELEASE.version + '.tar.gz.part')));
     cancelled.abort(); await assert.rejects(unfinished, { name: 'AbortError' });
     await settleBinaryInstalls(cancelled.signal);
     assert(streamCancelled); assert(!fs.existsSync(path.join(paths.bin, RELEASE.version + '.tar.gz.part')));
     assert(!fs.existsSync(path.join(paths.bin, RELEASE.version + '.staging-' + process.pid)));
     global.fetch = async () => new Response(packaged);
-    await resolveBinary('', () => {}, new AbortController().signal, true);
+    await resolveBinary('', () => {}, new AbortController().signal, approved);
     console.log('PASS owner shutdown cancels transfer, cleans staging and allows a later retry');
   } finally { global.fetch = oldFetch; }
   fs.mkdirSync(path.join(paths.bin, 'local'), { recursive: true });
   fs.writeFileSync(path.join(paths.bin, 'local', EXE), bytes, { mode: 0o755 });
-  const { Supervisor } = require(root + '/plugin/server/supervisor.ts');
+  sdk.reportedVersion = '0.0.9';
+  await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), (e) => e instanceof ServerVersionMismatch && e.source === 'local' && e.found === '0.0.9');
+  sdk.reportedVersion = undefined;
+  assert.equal((await resolveBinary('', () => {}, new AbortController().signal)).version, SERVER_VERSION);
+  console.log('PASS a local build of another version is refused');
+  const { Supervisor, ourServerPids } = require(root + '/plugin/server/supervisor.ts');
+  {
+    const unix = [
+      '  101 /Users/a/.paseo/plugin-data/voice-kit/bin/local/voicekit serve --port 47615 --models-dir /Users/a/.paseo/plugin-data/voice-kit/models --reuse-dir /x',
+      '  102 /tmp/other/voicekit serve --port 0 --models-dir /Users/a/other-models',
+      '  103 /usr/bin/vim voicekit serve --models-dir /Users/a/.paseo/plugin-data/voice-kit/modelsx',
+      '  104 node voicekit-tests.mjs --models-dir /Users/a/.paseo/plugin-data/voice-kit/models',
+    ].join('\n');
+    assert.deepEqual(ourServerPids(unix, '/Users/a/.paseo/plugin-data/voice-kit/models'), [101]);
+    const windows = [
+      '4120 "C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\bin\\local\\voicekit.exe" serve --port 47615 --models-dir C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models --exit-on-stdin-eof',
+      '4121 C:\\VK\\voicekit.exe serve --port 0 --models-dir "C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models"',
+      '4122 C:\\VK\\voicekit.exe probe --models-dir C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models',
+      '4123 C:\\VK\\voicekit.exe serve --models-dir D:\\elsewhere',
+      '',
+    ].join('\r\n');
+    assert.deepEqual(ourServerPids(windows, 'c:\\users\\a\\.paseo\\plugin-data\\voice-kit\\models', true), [4120, 4121]);
+    console.log('PASS leftover servers are found on Unix and Windows, and only for this models folder');
+  }
   const supervisor = new Supervisor(() => {});
   const config = { binaryPath: '', port: 0, sttModels: ['test'], ttsModel: 'test', voice: 'A', speed: 1,
     language: 'auto', voiceLanguages: [], vocabulary: '', accelerator: 'cpu', autoDownload: false,
-    runtimeDownloadApproved: false, idleUnloadMinutes: 10, neuralEngine: false, catalogPath: '/unused', catalogHash: '1' };
+    approvedServerArchive: '', idleUnloadMinutes: 10, neuralEngine: false, catalogPath: '/unused', catalogHash: '1' };
   let release;
   gate = new Promise(resolve => { release = resolve; });
   const first = supervisor.apply(config);

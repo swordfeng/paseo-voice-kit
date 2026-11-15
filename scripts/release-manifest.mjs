@@ -29,6 +29,8 @@ if (Object.keys(assets).length === 0) throw new Error("SHA256SUMS listed no voic
 const path = join(import.meta.dirname, "..", "plugin", "shared", "release.ts");
 const source = readFileSync(path, "utf8");
 const version = tag.replace(/^v/, "");
+const required = source.match(/export const SERVER_VERSION = "([^"]+)"/)?.[1];
+if (version !== required) throw new Error(`release ${version} does not match SERVER_VERSION ${required} in release.ts`);
 const block = `export const RELEASE: { version: string; assets: Partial<Record<string, ReleaseAsset>> } = ${JSON.stringify({ version, assets }, null, 2)};`;
 const next = source.replace(/export const RELEASE:[\s\S]*?\n};/, block);
 if (next === source) throw new Error("could not find the RELEASE block in release.ts");

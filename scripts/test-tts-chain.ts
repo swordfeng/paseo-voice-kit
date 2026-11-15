@@ -16,6 +16,11 @@ assert(!(fresh.languages as string[]).includes("zh"));
 const pair=voiceChainCatalog({...defaults,ttsModels:["supertonic-3","qwen3-tts-0.6b-gguf-q4"]},[])!;
 assert.equal((pair.languages as string[]).length,32);
 assert.deepEqual((pair.options as any).chain,["supertonic-3","qwen3-tts-0.6b-gguf-q4"]);
+// Each model gets its own voice (the measured F1 / serena pair by default); no personas.
+assert.deepEqual((pair.options as any).model_voices,{"supertonic-3":"F1","qwen3-tts-0.6b-gguf-q4":"serena"});
+assert.equal((pair.options as any).personas,undefined);
+const chosen=voiceChainCatalog({...defaults,ttsModels:["supertonic-3"],modelVoices:{"supertonic-3":"M3","not-enabled":"x"}},[])!;
+assert.deepEqual((chosen.options as any).model_voices,{"supertonic-3":"M3"},"only enabled models, the user's choice first");
 const empty=voiceChainCatalog({...defaults,ttsModels:[]},[])!;
 assert.deepEqual((empty.options as any).chain,[]);
 const model="qwen-talker-0.6b-customvoice-Q4_K_M.gguf",codec="qwen-tokenizer-12hz-Q4_K_M.gguf";

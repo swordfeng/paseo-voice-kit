@@ -1,16 +1,17 @@
 // The Models tab: every model as a card with its state and actions, grouped by kind.
 import type { PluginTheme } from "@getpaseo/plugin";
+import { useRpc } from "@getpaseo/plugin/client";
 import { ExternalLink, SettingsInput, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { MODEL_LICENSES } from "../shared/model-licenses";
-import type { Model, RouteVoices, Status } from "../shared/rpc";
-import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, effectiveApproximateLanguages, type CustomModel, type Preferences } from "../shared/settings";
+import { setModelKeyRpc, type Model, type RouteVoices, type Status } from "../shared/rpc";
+import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, effectiveApproximateLanguages, modelVoice, type CustomModel, type Preferences } from "../shared/settings";
 import { LanguagePicker } from "./custom-model-form";
 import { MlxRuntimeStatus } from "./mlx-runtime";
 import type { WriteResult } from "./settings-writer";
 import { formatBytes, percent } from "./format";
-import { DEVICE_NAMES, appleSilicon, joinList, languageName, languageOptionLabel, modelDescription, modelLabel, useText, usedByLabel, type Translate } from "./i18n";
+import { DEVICE_NAMES, appleSilicon, joinList, languageName, languageOptionLabel, modelDescription, modelLabel, useText, usedByLabel, voiceLabel, type Translate } from "./i18n";
 import { coverage, isVisibleVoiceModel, move, nativeLanguages } from "./voice-chain";
 import { Badge, Button, Chip, Heading, ProgressBar } from "./kit";
 
@@ -86,6 +87,9 @@ export interface ModelManagerProps {
   routes: RouteVoices[];
   /** Which list is shown: speech recognition or voices. */
   kind: "stt" | "tts";
+  /** A voice model's own preview with the voice on its card; `previewing` is the model playing. */
+  previewModel(model: Model, voice: string | undefined): void;
+  previewing: string | null;
 }
 
 /** The model chosen for a listening feature: the saved one, else this computer's default. */
@@ -366,7 +370,12 @@ function VoiceModels(props: ModelManagerProps & { customById: Map<string, Custom
           highlight
           enabled
           order={enabled.length > 1 ? i + 1 : undefined}
-          extra={paused(m.id)}
+          extra={
+            <>
+              {paused(m.id)}
+              <CardVoice {...props} model={m} route={routeOf(m.id)} custom={customById.get(m.id)} />
+            </>
+          }
           actions={
             <>
               <Button theme={theme} label={t("voiceModels.up")} disabled={busy || i === 0} onPress={() => write(move(chain, m.id, -1))} />
@@ -401,6 +410,82 @@ function VoiceModels(props: ModelManagerProps & { customById: Map<string, Custom
       {yours.map((m) => (
         <ModelCard key={m.id} {...props} model={m} custom={customById.get(m.id)} enabled={false} actions={enableButton(m)} extra={languageEditor(m)} />
       ))}
+    </View>
+  );
+}
+
+/** Lists longer than this get language and gender filters (Kokoro v1.1 has 103 voices). */
+const FILTER_FROM = 12;
+
+/**
+ * An enabled voice model's voice, chosen from its own voices, and a preview of it. Single-voice
+ * models show their voice as text; a remote server's is set in its model settings.
+ */
+function CardVoice(props: ModelManagerProps & { model: Model; route: RouteVoices | undefined; custom?: CustomModel }) {
+  const { theme, model: m, route, values, busy, previewing } = props;
+  const { t, locale } = useText();
+  const [language, setLanguage] = useState("");
+  const [gender, setGender] = useState("");
+  const muted = { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 };
+  const voices = route?.voices ?? [];
+  const chosen = modelVoice(values, m.id, m.family) ?? route?.shared_voice ?? undefined;
+  const current = voices.find((v) => v.id === chosen) ?? (chosen ? undefined : voices[0]);
+  const play = (
+    <Button
+      theme={theme}
+      label={previewing === m.id ? t("speaking.playing") : t("speaking.play")}
+      disabled={busy || previewing !== null || route?.available === false}
+      onPress={() => props.previewModel(m, current?.id ?? chosen)}
+    />
+  );
+  const row = (content: ReactNode) => (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+      <View style={{ flexShrink: 1, flexGrow: 1 }}>{content}</View>
+      {play}
+    </View>
+  );
+  if (m.engine === "openai") {
+    const voice = props.custom?.voice;
+    return row(<Text style={muted}>{voice ? t("voiceModels.voiceRemote", { voice }) : t("voiceModels.voiceRemoteDefault")}</Text>);
+  }
+  // Downloaded but its voices aren't known before it loads: a preview loads it.
+  if (voices.length === 0) return route?.installed ? row(<Text style={muted}>{t("voiceModels.voiceAfterLoad")}</Text>) : <Text style={muted}>{t("voiceModels.voiceAfterDownload")}</Text>;
+  if (voices.length === 1 || route?.shared_voice) {
+    const only = voices.find((v) => v.id === route?.shared_voice) ?? voices[0];
+    return row(<Text style={muted}>{t("voiceModels.voiceSingle", { voice: voiceLabel(t, locale, only) })}</Text>);
+  }
+  const filtering = voices.length > FILTER_FROM;
+  const languages = [...new Set(voices.map((v) => v.language).filter((l) => l && l !== "multi"))];
+  const genders = [...new Set(voices.map((v) => v.gender).filter(Boolean))];
+  const shown = voices.filter((v) => (!language || v.language === language) && (!gender || v.gender === gender));
+  // Frequently used voices first; the chosen one stays listed even when filtered out.
+  const ordered = [...shown.filter((v) => v.featured), ...shown.filter((v) => !v.featured)];
+  if (current && !ordered.includes(current)) ordered.unshift(current);
+  const all = { label: t("voiceModels.voiceFilterAll"), value: "" };
+  return (
+    <View style={{ gap: 6 }}>
+      {filtering ? (
+        <View style={{ flexDirection: props.compact ? "column" : "row", gap: 8 }}>
+          {languages.length > 1 ? (
+            <View style={{ flex: props.compact ? undefined : 1 }}>
+              <SettingsSelect label={t("voiceModels.voiceFilterLanguage")} value={language} options={[all, ...languages.map((l) => ({ label: languageName(l, locale), value: l }))]} onValueChange={setLanguage} />
+            </View>
+          ) : null}
+          {genders.length > 1 ? (
+            <View style={{ flex: props.compact ? undefined : 1 }}>
+              <SettingsSelect label={t("voiceModels.voiceFilterGender")} value={gender} options={[all, ...genders.map((g) => ({ label: g === "female" ? t("common.female") : g === "male" ? t("common.male") : g, value: g }))]} onValueChange={setGender} />
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+      {row(
+        <SettingsSelect
+          label={t("voiceModels.voice")}
+          value={current?.id ?? ""}
+          options={ordered.map((v) => ({ label: voiceLabel(t, locale, v), value: v.id }))}
+          onValueChange={(voice) => props.update({ modelVoices: { ...values.modelVoices, [m.id]: voice } })}
+        />,
+      )}
     </View>
   );
 }
@@ -508,6 +593,11 @@ function CustomEditor(props: ModelManagerProps & { model: Model; custom: CustomM
   const [languages, setLanguages] = useState<string[] | undefined>(custom.languages);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Remote servers: a saved key is never shown; it can be replaced or removed.
+  const remote = custom.source === "server";
+  const [newKey, setNewKey] = useState("");
+  const [removeKey, setRemoveKey] = useState(false);
+  const setModelKey = useRpc(setModelKeyRpc);
   const name = label.trim();
   // A voice model must keep at least one language to be used; for speech recognition an empty
   // list means no limit.
@@ -516,7 +606,17 @@ function CustomEditor(props: ModelManagerProps & { model: Model; custom: CustomM
     if (!name || noLanguages || saving) return;
     setSaving(true);
     setError(null);
-    const next = values.customModels.map((x) => (x.id === custom.id ? { ...x, label: name, ...(fixed || languages === undefined ? {} : { languages }) } : x));
+    const key = remote ? newKey.trim() : "";
+    const keyChange = key ? { hasApiKey: true } : remote && removeKey && custom.hasApiKey ? { hasApiKey: false } : {};
+    if ("hasApiKey" in keyChange) {
+      const failure = await setModelKey({ id: custom.id, apiKey: key || null }).then(() => null, (e: unknown) => (e instanceof Error ? e.message : String(e)));
+      if (failure !== null) {
+        setSaving(false);
+        setError(failure);
+        return;
+      }
+    }
+    const next = values.customModels.map((x) => (x.id === custom.id ? { ...x, label: name, ...keyChange, ...(fixed || languages === undefined ? {} : { languages }) } : x));
     const result = await props.saveSettings({ customModels: next });
     setSaving(false);
     if (result.ok) props.onDone();
@@ -525,6 +625,12 @@ function CustomEditor(props: ModelManagerProps & { model: Model; custom: CustomM
   return (
     <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: c.border, paddingTop: 8 }}>
       <SettingsInput label={t("form.name")} initialValue={custom.label} onChangeText={setLabel} />
+      {remote ? (
+        <SettingsInput label={t("form.apiKey")} hint={custom.hasApiKey ? t("form.apiKeySaved") : t("form.apiKeyHint")} secureTextEntry onChangeText={setNewKey} />
+      ) : null}
+      {remote && custom.hasApiKey && !newKey.trim() ? (
+        <SettingsSwitch label={t("form.apiKeyRemove")} value={removeKey} onValueChange={setRemoveKey} />
+      ) : null}
       {fixed ? (
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("models.languagesFixed")}</Text>
       ) : (

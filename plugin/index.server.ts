@@ -13,16 +13,20 @@ import {
   statusRpc,
   voicesRpc,
   mlxRuntimeRpc,
+  setModelKeyRpc,
   type Engine,
   type Reason,
   type Model,
   type Site,
   type Status,
   type RouteVoices,
+  type SpokenRun,
   type Voice,
+  SpokenRunSchema,
 } from "./shared/rpc";
+import { z } from "zod";
 import { PREVIEW_LINES } from "./shared/languages";
-import { DEFAULT_CPU_STT_MODEL, preferences, voiceSpec, type Preferences } from "./shared/settings";
+import { DEFAULT_CPU_STT_MODEL, PASEO_VOICE, preferences, type Preferences } from "./shared/settings";
 import { DefaultSttModel, DefaultSttSelectionPending, chooseDefaultSttModel, needsDefaultStt, withDefaultSttModels } from "./server/default-stt";
 import { SpeechSwitch, type Desired } from "./server/speech-switch";
 import { loadState, type PluginState } from "./server/state";
@@ -32,6 +36,7 @@ import { MemorySampler } from "./server/memory";
 import { Supervisor, type ServerConfig, type SupervisorSnapshot } from "./server/supervisor";
 import { voicekit, voicekitJson } from "./server/voicekit-api";
 import { writeCustomCatalog } from "./server/custom-models";
+import { setKey } from "./server/model-keys";
 import { lookup as hfLookup } from "./server/huggingface";
 import { MlxRuntimeMonitor } from "./server/mlx-runtime";
 import { featurePhase } from "./server/feature-phase";
@@ -55,13 +60,13 @@ function serverConfig(prefs: Preferences, catalog: { path: string; hash: string;
     port: prefs.port,
     sttModels: stt,
     ttsModel: catalog.ttsModel ?? TTS_CHAIN_ID,
-    voice: voiceSpec(prefs),
+    voice: PASEO_VOICE,
     speed: prefs.speed,
     language: prefs.language,
     vocabulary: prefs.vocabulary,
     accelerator: prefs.accelerator,
     autoDownload: prefs.autoDownload,
-    runtimeDownloadApproved: prefs.runtimeDownloadApproved,
+    approvedServerArchive: prefs.approvedServerArchive,
     idleUnloadMinutes: prefs.idleUnloadMinutes,
     neuralEngine: prefs.neuralEngine,
     catalogPath: catalog.path,
@@ -116,7 +121,7 @@ export function computeDesired(prefs: Preferences | null, snap: SupervisorSnapsh
       voiceInput: voiceInput ? null : phaseWait ?? describeWait(stt(prefs?.voiceInputModel), health?.downloads),
       voiceOutput: !hasVoiceModels ? { code: "noVoiceModels" } : voiceOutput ? null : phaseWait ?? describeWait(health?.tts ?? undefined, health?.downloads),
     },
-    voice: prefs ? voiceSpec(prefs) : "female-higher",
+    voice: PASEO_VOICE,
     baseUrl: healthy ? baseUrl : null,
     token,
   };
@@ -186,8 +191,15 @@ export default function contribute(server: PluginServerContext) {
       try {
         defaultSttModel = await listeningDefault.get(async () => {
           const model = await chooseDefaultSttModel(values,
-            () => supervisor.prepareBinary(values.binaryPath, "Checking this machine's GPU", { code: "checkingGpu" }, values.runtimeDownloadApproved, signal),
-            line => supervisor.note(line), signal);
+            () => supervisor.prepareBinary(values.binaryPath, "Checking this machine's GPU", { code: "checkingGpu" }, values.approvedServerArchive, signal),
+            line => supervisor.note(line), signal).catch((error) => {
+              // Three inconclusive GPU checks in a row: settle on the CPU model rather than wait forever.
+              if (error instanceof DefaultSttSelectionPending && defaultFailures >= 2) {
+                supervisor.note("[voice-kit] GPU check inconclusive three times; using the CPU listening model as this computer's default");
+                return DEFAULT_CPU_STT_MODEL;
+              }
+              throw error;
+            });
           if (revision !== prefsRevision || stopped) throw new Error("Speech preferences changed during initialization");
           return model;
         }, signal);
@@ -203,9 +215,10 @@ export default function contribute(server: PluginServerContext) {
             if (!stopped && revision === prefsRevision) void applyPrefs(values).catch(error => supervisor.note(`[voice-kit] listening retry failed: ${String(error)}`));
           }, delay);
         }
-        // Let normal startup report runtime installation/consent errors. This temporary value
-        // is never persisted as the default when the runtime could not be prepared.
-        nextPrefs = withDefaultSttModels(values, DEFAULT_CPU_STT_MODEL);
+        // While the GPU check is merely pending, listening stays with Paseo's built-in speech, so no
+        // model is downloaded that the check may then replace. Other errors (installation consent)
+        // still start the server with a temporary model so they are reported; it is never saved.
+        nextPrefs = withDefaultSttModels(values, error instanceof DefaultSttSelectionPending ? "" : DEFAULT_CPU_STT_MODEL);
       }
     }
     if (revision !== prefsRevision || stopped) return;
@@ -224,10 +237,16 @@ export default function contribute(server: PluginServerContext) {
     publish();
   }
 
+  // Without its state Voice Kit can't know which Paseo settings to give back, so it stays off
+  // (no server, no changes to Paseo) and reports why.
+  let stateError: string | null = null;
   const initialized = (async () => {
     state = await loadState();
     speech = new SpeechSwitch(state);
-  })();
+  })().catch((error) => {
+    stateError = `Voice Kit couldn't read its state file, so it left Paseo's voice settings alone: ${error instanceof Error ? error.message : String(error)}`;
+    console.error(`[voice-kit] ${stateError}`);
+  });
   const ready = (async () => {
     await initialized;
     const revision = prefsRevision;
@@ -271,8 +290,8 @@ export default function contribute(server: PluginServerContext) {
       gpuMemoryBytes: currentMemory ? usage.gpuMemoryBytes : null,
       gpuSharedMemoryBytes: currentMemory ? usage.gpuSharedMemoryBytes : null,
       gpuMemorySource: currentMemory ? usage.gpuMemorySource : null,
-      message: speech?.error ?? snap.message,
-      notice: speech?.error ? null : snap.notice,
+      message: stateError ?? speech?.error ?? snap.message,
+      notice: stateError || speech?.error ? null : snap.notice,
       connected: speech?.connected ?? false,
       binary: { path: snap.binary?.path ?? null, version: snap.binary?.version ?? null, source: snap.binary?.source ?? null },
       baseUrl: supervisor.baseUrl,
@@ -321,6 +340,15 @@ export default function contribute(server: PluginServerContext) {
     return { models: body.models, coremlSupported: body.coremlSupported };
   });
 
+  server.handle(setModelKeyRpc, async ({ id, apiKey }, context) => {
+    await withSession(context);
+    await setKey(id, apiKey);
+    // The catalog carries the key: rewrite it (a changed catalog restarts the server).
+    const current = await settings.read();
+    if (current.status === "ready") await applyPrefs(current.values);
+    return { ok: true };
+  });
+
   server.handle(pullModelRpc, async ({ id }, context) => {
     await withSession(context);
     if (isPaseoModel(id)) {
@@ -353,17 +381,28 @@ export default function contribute(server: PluginServerContext) {
     return { voices: body.voices, routes: body.routes ?? [] };
   });
 
-  server.handle(previewRpc, async ({ voice, text }, context) => {
+  server.handle(previewRpc, async ({ voice, text, model }, context) => {
     await withSession(context);
     const started = Date.now();
     const response = await voicekit(supervisor, "/v1/audio/speech", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: TTS_CHAIN_ID, voice: voice ?? (prefs ? voiceSpec(prefs) : undefined), input: text?.trim() || defaultPreview(prefs), response_format: "wav" }),
+      body: JSON.stringify({
+        model: TTS_CHAIN_ID,
+        voice: voice ?? PASEO_VOICE,
+        input: text?.trim() || defaultPreview(prefs),
+        response_format: "wav",
+        ...(model ? { voicekit_route: model } : {}),
+      }),
       timeoutMs: 60_000,
     });
     const audio = Buffer.from(await response.arrayBuffer());
-    return { base64: audio.toString("base64"), mimeType: "audio/wav", ms: Date.now() - started };
+    let runs: SpokenRun[] = [];
+    try {
+      const parsed = z.array(SpokenRunSchema).safeParse(JSON.parse(response.headers.get("x-voicekit-runs") ?? "[]"));
+      if (parsed.success) runs = parsed.data;
+    } catch { /* No report: an older server or a single model. */ }
+    return { base64: audio.toString("base64"), mimeType: "audio/wav", ms: Date.now() - started, runs };
   });
 
   server.handle(reclaimRpc, async ({ site }, context) => {

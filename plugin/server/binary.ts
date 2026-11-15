@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { execCommand } from "@getpaseo/plugin/server";
-import { RELEASE, platformKey } from "../shared/release";
+import { RELEASE, SERVER_VERSION, platformKey } from "../shared/release";
 import { EXE, paths } from "./paths";
 import { extractTarGz } from "./untar";
 
@@ -20,10 +20,27 @@ export interface InstallProgress {
   total: number | null;
 }
 
+/** Approval is for one archive: a new pinned version or platform build asks again. */
 export class RuntimeDownloadRequired extends Error {
-  constructor(readonly url: string) {
-    super("Confirm installation of the Voice Kit speech server before downloading it.");
+  constructor(readonly url: string, readonly sha256: string, readonly version: string) {
+    super(`Confirm installation of the Voice Kit speech server ${version} before downloading it.`);
   }
+}
+
+/** A server of another version than the plugin is written for (SERVER_VERSION). */
+export class ServerVersionMismatch extends Error {
+  constructor(readonly found: string | null, readonly source: ResolvedBinary["source"], readonly path: string | null) {
+    super(
+      `Voice Kit needs speech server ${SERVER_VERSION}, but ${found ? `found ${found}` : "couldn't read the version"} ` +
+        (source === "release" ? `in the pinned release.` : `at ${path}.`) +
+        (source === "release" ? " Update the Voice Kit plugin, or build the server with scripts/dev-install.sh." : source === "local" ? " Rebuild it with scripts/dev-install.sh." : " Update the Binary path setting."),
+    );
+  }
+}
+
+function checked(binary: ResolvedBinary): ResolvedBinary {
+  if (binary.version !== SERVER_VERSION) throw new ServerVersionMismatch(binary.version, binary.source, binary.path);
+  return binary;
 }
 
 async function isExecutable(path: string): Promise<boolean> {
@@ -71,18 +88,19 @@ export async function resolveBinary(
   binaryPath: string,
   onProgress: (p: InstallProgress) => void,
   signal: AbortSignal,
-  allowDownload = false,
+  /** SHA-256 of the release archive the user approved downloading, or "" for none. */
+  approved = "",
   waitSignal: AbortSignal = signal,
 ): Promise<ResolvedBinary> {
   cancelled(signal);
   cancelled(waitSignal);
   // One install at a time: concurrent callers share it (they would write the same files).
-  const key = JSON.stringify([binaryPath.trim(), allowDownload]);
+  const key = JSON.stringify([binaryPath.trim(), approved]);
   let running = inflight.get(key);
   if (running?.signal.aborted) {
     // Its staging cleanup must finish before a replacement touches the same paths.
     await waitFor(running.promise.catch(() => undefined), waitSignal);
-    return resolveBinary(binaryPath, onProgress, signal, allowDownload, waitSignal);
+    return resolveBinary(binaryPath, onProgress, signal, approved, waitSignal);
   }
   if (!running) {
     const listeners = new Set<(p: InstallProgress) => void>();
@@ -90,7 +108,7 @@ export async function resolveBinary(
     entry.promise = findOrInstall(binaryPath, progress => {
       entry.progress = progress;
       for (const listener of listeners) listener(progress);
-    }, signal, allowDownload).finally(() => {
+    }, signal, approved).finally(() => {
       if (inflight.get(key) === entry) inflight.delete(key);
       listeners.clear();
     });
@@ -120,16 +138,16 @@ async function findOrInstall(
   binaryPath: string,
   onProgress: (p: InstallProgress) => void,
   signal: AbortSignal,
-  allowDownload: boolean,
+  approved: string,
 ): Promise<ResolvedBinary> {
   const custom = binaryPath.trim();
   if (custom) {
     if (!(await isExecutable(custom))) throw new Error(`Binary path is not an executable file: ${custom}`);
-    return { path: custom, source: "setting", version: await versionOf(custom, signal) };
+    return checked({ path: custom, source: "setting", version: await versionOf(custom, signal) });
   }
 
   const local = join(paths.bin, "local", EXE);
-  if (await isExecutable(local)) return { path: local, source: "local", version: await versionOf(local, signal) };
+  if (await isExecutable(local)) return checked({ path: local, source: "local", version: await versionOf(local, signal) });
 
   const key = platformKey(process.platform, process.arch);
   const asset = RELEASE.assets[key];
@@ -139,9 +157,11 @@ async function findOrInstall(
       `No voicekit ${RELEASE.version} build is published for ${key} yet. Build one with scripts/dev-install.sh or set Binary path.`,
     );
   }
+  // Never download a release this plugin can't run.
+  if (RELEASE.version !== SERVER_VERSION) throw new ServerVersionMismatch(RELEASE.version, "release", null);
   const release = join(versionDir, ...asset.exe.split("/"));
   if (await isExecutable(release)) return { path: release, source: "release", version: RELEASE.version };
-  if (!allowDownload) throw new RuntimeDownloadRequired(asset.url);
+  if (approved !== asset.sha256) throw new RuntimeDownloadRequired(asset.url, asset.sha256, RELEASE.version);
   await installArchive(asset.url, asset.sha256, versionDir, onProgress, signal);
   if (!(await isExecutable(release))) throw new Error(`The voicekit archive did not contain ${asset.exe}`);
   return { path: release, source: "release", version: RELEASE.version };

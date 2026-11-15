@@ -118,8 +118,15 @@ export type TtsError = z.infer<typeof TtsErrorSchema>;
 
 /** Server notices as language-neutral data; `message` keeps the English text. */
 export const NoticeSchema = z.object({
-  code: z.enum(["portBusy", "checkingGpu", "crashRestarting", "crashGaveUp", "healthCheckFailed", "runtimeDownloadRequired"]),
+  code: z.enum(["portBusy", "checkingGpu", "crashRestarting", "crashGaveUp", "healthCheckFailed", "runtimeDownloadRequired", "serverVersionMismatch"]),
   url: z.string().optional(),
+  /** runtimeDownloadRequired: the archive to approve (its SHA-256) and its version. */
+  sha256: z.string().optional(),
+  /** runtimeDownloadRequired: the archive's version; serverVersionMismatch: the version found. */
+  version: z.string().optional(),
+  /** serverVersionMismatch: the version this plugin needs, and where the other server came from. */
+  required: z.string().optional(),
+  source: z.enum(["setting", "local", "release"]).optional(),
   port: z.number().optional(),
   /** Exit code and signal of a crashed server, as reported by the OS. */
   exit: z.string().optional(),
@@ -250,6 +257,12 @@ export const modelsRpc = defineRpc({
   input: Empty,
   output: z.object({ models: z.array(ModelSchema), coremlSupported: z.boolean() }),
 });
+/** Save or clear (null) the API key of a custom remote server. Keys can't be read back. */
+export const setModelKeyRpc = defineRpc({
+  name: "voicekit.models.set-key",
+  input: z.object({ id: z.string().regex(/^custom-[a-z0-9-]+$/), apiKey: z.string().max(4096).nullable() }),
+  output: Ok,
+});
 export const pullModelRpc = defineRpc({ name: "voicekit.models.pull", input: z.object({ id: z.string() }), output: Ok });
 export const removeModelRpc = defineRpc({
   name: "voicekit.models.remove",
@@ -290,10 +303,15 @@ export const voicesRpc = defineRpc({
   input: Empty,
   output: z.object({ voices: z.array(VoiceSchema), routes: z.array(RouteVoicesSchema).default([]) }),
 });
+/** Which model and voice read one part of a reply, and in which language. */
+export const SpokenRunSchema = z.object({ model: z.string(), voice: z.string(), language: z.string().nullable().default(null) });
+export type SpokenRun = z.infer<typeof SpokenRunSchema>;
+
+/** Speak text: through the whole voice list, or (with `model`) with that one model and `voice`. */
 export const previewRpc = defineRpc({
   name: "voicekit.preview",
-  input: z.object({ voice: z.string().optional(), text: z.string().max(400).optional() }),
-  output: z.object({ base64: z.string(), mimeType: z.string(), ms: z.number() }),
+  input: z.object({ voice: z.string().optional(), text: z.string().max(400).optional(), model: z.string().optional() }),
+  output: z.object({ base64: z.string(), mimeType: z.string(), ms: z.number(), runs: z.array(SpokenRunSchema).default([]) }),
 });
 export const reclaimRpc = defineRpc({
   name: "voicekit.reclaim",

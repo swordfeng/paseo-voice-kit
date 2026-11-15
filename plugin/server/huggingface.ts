@@ -132,8 +132,26 @@ export function suggest(tree: HfTree): HfLookup["suggestion"] {
   else if (name.includes("paraformer")) [family, kind] = ["paraformer", "stt"];
   else if (name.includes("fire-red") || name.includes("firered")) [family, kind] = [has(/^encoder/) ? "fire_red_asr" : "fire_red_asr_ctc", "stt"];
   else if (name.includes("dolphin")) [family, kind] = ["dolphin", "stt"];
+  else if (name.includes("moonshine")) [family, kind] = ["moonshine", "stt"];
+  else if (name.includes("omnilingual")) [family, kind] = ["omnilingual", "stt"];
   else if (has(/^model.*\.onnx$/) && has(/^tokens\.txt$/)) kind = "stt";
   return { source: "sherpa", kind, family, whisperFiles: [] };
+}
+
+/**
+ * Refuse, when a model is added, what this version can't speak with: sherpa-onnx 2.0 no longer
+ * includes espeak-ng, so voices that need its phonemes (Piper, English-only Kokoro) would only
+ * fail later. Matcha dropped English text in tests.
+ */
+export function unsupportedReason(tree: HfTree, suggestion: HfLookup["suggestion"]): string | null {
+  const root = tree.files.filter((f) => !f.path.includes("/")).map((f) => f.path);
+  const lexicon = root.some((p) => p.startsWith("lexicon") && p.endsWith(".txt"));
+  const espeak = tree.files.some((f) => f.path.startsWith("espeak-ng-data/"));
+  if (tree.repo.toLowerCase().includes("matcha")) return "Matcha voice models aren't supported in this version.";
+  if (suggestion.source === "sherpa" && suggestion.kind === "tts" && !lexicon && (suggestion.family === "kokoro" || espeak)) {
+    return "This voice model needs a phonemizer (espeak-ng) that Voice Kit doesn't include yet. Models with a lexicon, such as Kokoro multilingual or MeloTTS, work.";
+  }
+  return null;
 }
 
 export async function lookup(input: string): Promise<HfLookup> {
@@ -141,6 +159,8 @@ export async function lookup(input: string): Promise<HfLookup> {
   if (!parsed) throw new Error("Enter a Hugging Face repository like owner/name or its URL.");
   const tree = await hfTree(parsed.repo, parsed.revision);
   const suggestion = suggest(tree);
+  const unsupported = unsupportedReason(tree, suggestion);
+  if (unsupported) throw new Error(unsupported);
   const files = suggestion.source === "sherpa" ? sherpaFiles(tree.files) : suggestion.source === "mlx" ? mlxFiles(tree.files) : suggestion.source==="gguf" ? [] : tree.files;
   return {
     repo: tree.repo,

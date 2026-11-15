@@ -3,6 +3,14 @@
  * this from a GitHub release. Platforms without an entry need a local build
  * (`scripts/dev-install.sh`) or the "Binary path" setting.
  */
+/**
+ * The speech server version this plugin is written for. Voice Kit refuses any other server,
+ * whichever source it comes from, and never downloads a pinned release of another version.
+ * Keep it equal to `version` in server/Cargo.toml (checked by scripts/test-supervisor.cjs); a
+ * change that needs a new server lands together with that server's published release.
+ */
+export const SERVER_VERSION = "0.1.1";
+
 export interface ReleaseAsset {
   url: string;
   /** SHA-256 of the release archive. */

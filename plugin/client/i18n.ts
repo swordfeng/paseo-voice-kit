@@ -205,6 +205,10 @@ export function noticeText(t: Translate, notice: Notice): string {
       return t("notice.healthCheckFailed", { error: notice.error ?? "" });
     case "runtimeDownloadRequired":
       return t("consent.status");
+    case "serverVersionMismatch": {
+      const vars = { required: notice.required ?? "", found: notice.version ?? t("notice.unknownVersion") };
+      return t(notice.source === "local" ? "notice.versionLocal" : notice.source === "setting" ? "notice.versionSetting" : "notice.versionRelease", vars);
+    }
   }
 }
 

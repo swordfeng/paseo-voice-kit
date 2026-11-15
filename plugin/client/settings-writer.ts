@@ -55,6 +55,11 @@ export class SettingsWriter<V extends object> {
     private readonly onChange: () => void,
     private readonly onFailure: (failure: WriteFailure) => void,
     private readonly lastError: () => string | null = () => null,
+    /**
+     * A save that never answers (a remote host's connection dropped) would otherwise keep its
+     * value on screen forever, hiding what the host and other devices saved since.
+     */
+    private readonly saveTimeoutMs = 15_000,
   ) {}
 
   /** Changes not yet confirmed by Paseo, newest last, for showing them right away. */
@@ -110,10 +115,19 @@ export class SettingsWriter<V extends object> {
   private async attempt(patch: Partial<V>): Promise<{ ok: boolean; revision: string | null }> {
     const doc = this.port.current();
     if (!doc) return { ok: false, revision: null };
-    const ok = await this.port.save(jsonSafe({ ...doc.values, ...patch }), doc.revision).catch((error: unknown) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => {
+        this.thrown = "Saving timed out: the host didn't answer";
+        resolve(false);
+      }, this.saveTimeoutMs);
+    });
+    const saving = this.port.save(jsonSafe({ ...doc.values, ...patch }), doc.revision).catch((error: unknown) => {
       this.thrown = error instanceof Error ? error.message : String(error);
       return false;
     });
+    const ok = await Promise.race([saving, timedOut]);
+    clearTimeout(timer);
     // Wait until the saved document is shown, so the next save starts from it.
     if (ok) await this.port.revisionAfter(doc.revision);
     return { ok, revision: doc.revision };

@@ -6,6 +6,7 @@ import {
   SettingsAction,
   SettingsCard,
   SettingsInput,
+  SettingsRow,
   SettingsSection,
   SettingsSelect,
   SettingsSwitch,
@@ -27,9 +28,10 @@ import {
   type Model,
   type Site,
   type SiteStatus,
+  type SpokenRun,
   type Status,
 } from "../shared/rpc";
-import { LANGUAGES } from "../shared/languages";
+import { LANGUAGES, PREVIEW_LINES } from "../shared/languages";
 import { DEFAULT_PORT, GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, preferences, type Preferences } from "../shared/settings";
 import { CustomModelForm } from "./custom-model-form";
 import { formatBytes, percent, phaseTone, type Tone } from "./format";
@@ -49,7 +51,7 @@ import {
   voiceLabel,
   type Translate,
 } from "./i18n";
-import { Button, Tabs } from "./kit";
+import { Button, FieldWithAction, Tabs } from "./kit";
 import { ModelManager, neuralHint } from "./model-manager";
 import { useSettingsWriter } from "./settings-writer";
 import { CHAIN_ROUTER_ID, isVisibleVoiceModel, nativeLanguages } from "./voice-chain";
@@ -142,7 +144,9 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const getLogs = useRpc(logsRpc);
   const [tab, setTab] = useState<Tab>("listening");
   const [showLogs, setShowLogs] = useState(false);
-  const [showAllVoices, setShowAllVoices] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replyRuns, setReplyRuns] = useState<SpokenRun[] | null>(null);
+  const [previewing, setPreviewing] = useState<string | null>(null);
   // Experimental options start collapsed, or open while one of them is on.
   const [experimental, setExperimental] = useState<boolean | null>(null);
   const [adding, setAdding] = useState<"stt" | "tts" | null>(null);
@@ -184,13 +188,31 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     onSuccess: refresh,
     onError: (error) => toast.error(errorText(tRef.current, error)),
   });
-  const previewVoice = useMutation({
-    mutationFn: async () => {
-      const audio = await preview({});
+  // "Try a reply": the whole voice list, reporting which model read each part.
+  const tryReply = useMutation({
+    mutationFn: async (text: string) => {
+      setReplyRuns(null);
+      const audio = await preview({ text: text.trim() || undefined });
+      setReplyRuns(audio.runs);
       await playPreview(audio, tRef.current);
       return audio.ms;
     },
     onError: (error) => toast.error(errorText(tRef.current, error)),
+  });
+  // A voice model's own preview, with the voice picked on its card.
+  const previewModel = useMutation({
+    mutationFn: async ({ id, voice, text }: { id: string; voice?: string; text: string }) => {
+      setPreviewing(id);
+      const audio = await preview({ model: id, voice, text });
+      await playPreview(audio, tRef.current);
+      return audio.ms;
+    },
+    onError: (error) => toast.error(errorText(tRef.current, error)),
+    // The preview may have loaded the model: show its voices right away.
+    onSettled: () => {
+      setPreviewing(null);
+      void queryClient.invalidateQueries({ queryKey: ["voicekit", "voices"] });
+    },
   });
 
   const styles = useMemo(
@@ -295,48 +317,22 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     return m ? modelLabel(t, m) : modelLabel(t, { id, label: id });
   };
 
-  const withCurrent = (options: { label: string; value: string }[], current: string) =>
-    !current || options.some((o) => o.value === current) ? options : [{ label: voiceNameOf(current), value: current }, ...options];
-  // A saved voice not in the current list: a persona by its name, never its id.
-  const voiceNameOf = (id: string): string => {
-    const persona = PERSONA_NAMES[id];
-    return persona ? voiceLabel(t, locale, { label: persona[0] + " · " + persona[1], language: "multi", gender: persona[1] }) : id;
-  };
-
-  const allVoices = voices.data?.voices ?? [];
-  // With voice models enabled, voices are personas paired across the models, plus a custom choice per model.
   const routes = voices.data?.routes ?? [];
-  const multilingual = routes.length > 0;
-  // Single-model voices: the favourites follow the Language setting (that language's voices),
-  // else the model's own favourites.
-  const languageVoices = allVoices.filter((v) => v.language === values.language);
-  const featured = new Set(
-    (languageVoices.length ? (languageVoices.some((v) => v.featured) ? languageVoices.filter((v) => v.featured) : languageVoices.slice(0, 6)) : allVoices.filter((v) => v.featured)).map((v) => v.id),
-  );
-  const featuredCount = featured.size;
-  const voiceOptions = multilingual
-    ? [...allVoices.map((v) => ({ label: voiceLabel(t, locale, v), value: v.id })), { label: t("speaking.customPairing"), value: CUSTOM }]
-    : withCurrent(
-        allVoices.filter((v) => showAllVoices || featured.has(v.id) || v.id === values.voice).map((v) => ({ label: voiceLabel(t, locale, v), value: v.id })),
-        values.voice,
-      );
-  // Routes with one voice for every pairing (single-speaker models) have nothing to pick.
-  const pickRoutes = routes.filter((r) => !r.shared_voice);
-  const sharedRoutes = routes.filter((r) => r.shared_voice);
+  /** "Supertonic 3 · F1": which model and voice read a part of a reply. */
+  const spokenBy = (run: SpokenRun): string => {
+    const voice = routes.find((r) => r.model === run.model)?.voices.find((v) => v.id === run.voice);
+    return labelOf(run.model) + (run.voice ? " · " + (voice ? voiceLabel(t, locale, voice) : run.voice) : "");
+  };
+  // A model's preview line: the speech Language setting when the model speaks it, else its first language.
+  const previewLine = (m: Model): string => {
+    const languages = nativeLanguages(m);
+    const language = languages.includes(values.language) ? values.language : languages[0] ?? "en";
+    return PREVIEW_LINES[language] ?? PREVIEW_LINES.en;
+  };
   // The listening models, for the Language choices.
   const listeningIds = [values.dictationModel, values.voiceInputModel].map((id) => id || st?.defaultSttModel || "").filter(Boolean);
   const listening = [...new Set(listeningIds)].map((id) => byId.get(id));
   const listeningNames = listening.filter((m): m is Model => !!m).map((m) => modelLabel(t, m));
-  const pickVoice = (voice: string) => {
-    if (voice !== CUSTOM) return update({ voice });
-    // Start the custom choice from the persona that was selected.
-    const start: Record<string, string> = { ...values.modelVoices };
-    for (const r of routes) start[r.model] = start[r.model] ?? r.persona_voices[values.voice] ?? Object.values(r.persona_voices)[0] ?? "";
-    update({ voice: CUSTOM, modelVoices: start });
-  };
-  const customVoiceOf = (r: (typeof routes)[number]) =>
-    values.modelVoices[r.model] ?? r.persona_voices[values.voice] ?? r.persona_voices[Object.keys(r.persona_voices)[0]] ?? "";
-  const setCustomVoice = (r: (typeof routes)[number], v: string) => update({ modelVoices: { ...values.modelVoices, [r.model]: v } });
   const removeCustom = (id: string) => {
     const patch: Partial<Preferences> = { customModels: values.customModels.filter((m) => m.id !== id) };
     // Do not leave a feature pointing at a model that no longer exists.
@@ -384,12 +380,6 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     const helpers = [...groups.values()].map((g) => t("voiceModels.canSpeak", { model: joinList(t, g.names), languages: joinList(t, g.langs.map((l) => languageName(l, locale))) }));
     return sentences(t, t("speaking.unsupported", { languages: names }), ...helpers);
   })();
-  const sharedHint = () => {
-    if (sharedRoutes.length === 0) return null;
-    const languages = joinList(t, sharedRoutes.map((r) => labelOf(r.model)));
-    // "Downloaded when first needed" only while a voice is not on disk; being unloaded doesn't count.
-    return sharedRoutes.some((r) => !r.installed) ? t("speaking.singleVoicePending", { languages }) : t("speaking.singleVoice", { languages });
-  };
   const siteRow = (site: Site) => {
     const s = siteStatus(site);
     if (s?.state === "override") {
@@ -440,10 +430,13 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
       }}
       routes={routes}
       kind={kind}
+      previewing={previewing}
+      previewModel={(m, voice) => previewModel.mutate({ id: m.id, voice, text: previewLine(m) })}
     />
   );
   // First run: the speech server must be downloaded, and only with the user's permission.
-  const consent = st?.notice?.code === "runtimeDownloadRequired" && values.enabled && !values.runtimeDownloadApproved ? st.notice : null;
+  // Approval covers one archive (version and platform), so a new server version asks again.
+  const consent = st?.notice?.code === "runtimeDownloadRequired" && values.enabled && !!st.notice.sha256 && values.approvedServerArchive !== st.notice.sha256 ? st.notice : null;
   const statusMessage = consent ? null : st?.notice ? noticeText(t, st.notice) : st?.message;
   const accel = acceleratorKey(st);
 
@@ -480,7 +473,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
             <Text style={styles.muted}>{t("consent.models")}</Text>
             <Text style={styles.muted}>{t("consent.declineHint")}</Text>
             <View style={styles.actions}>
-              <Button theme={theme} kind="primary" label={t("consent.install")} onPress={() => update({ runtimeDownloadApproved: true })} />
+              <Button theme={theme} kind="primary" label={t("consent.install")} onPress={() => update({ approvedServerArchive: consent.sha256 ?? "" })} />
               <Button theme={theme} label={t("consent.decline")} onPress={() => update({ enabled: false })} />
             </View>
           </View>
@@ -533,33 +526,6 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
 
           <SettingsSection title={t("speaking.title")}>
             <SettingsSelect
-              label={t("speaking.voice")}
-              hint={multilingual ? sentences(t, values.voice === CUSTOM ? t("speaking.customHint") : t("speaking.pairedHint"), sharedHint()) : undefined}
-              value={values.voice}
-              options={voiceOptions}
-              onValueChange={pickVoice}
-            />
-            {multilingual && values.voice === CUSTOM
-              ? pickRoutes.map((r) => (
-                  <SettingsSelect
-                    key={r.route}
-                    label={t("speaking.routeVoice", { language: labelOf(r.model) })}
-                    value={customVoiceOf(r)}
-                    // Favourites first, then the rest.
-                    options={[...r.voices.filter((v) => v.featured), ...r.voices.filter((v) => !v.featured)].map((v) => ({ label: voiceLabel(t, locale, v), value: v.id }))}
-                    onValueChange={(v) => setCustomVoice(r, v)}
-                  />
-                ))
-              : null}
-            {!multilingual && allVoices.length > featuredCount && featuredCount > 0 ? (
-              <SettingsSwitch
-                label={t("speaking.showAll", { n: allVoices.length })}
-                hint={t("speaking.showAllHint")}
-                value={showAllVoices}
-                onValueChange={setShowAllVoices}
-              />
-            ) : null}
-            <SettingsSelect
               label={t("speaking.speed")}
               hint={speedHint()}
               disabled={speedUnavailable}
@@ -567,13 +533,29 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
               options={SPEEDS}
               onValueChange={(v) => update({ speed: Number(v) })}
             />
-            <SettingsAction
-              label={t("speaking.preview")}
-              hint={t("speaking.previewHint")}
-              actionLabel={previewVoice.isPending ? t("speaking.playing") : t("speaking.play")}
-              disabled={!st?.tts?.available || previewVoice.isPending}
-              onPress={() => previewVoice.mutate()}
-            />
+            <SettingsRow
+              label={t("speaking.tryReply")}
+              hint={replyRuns?.length ? t("speaking.readBy", { list: joinList(t, replyRuns.map(spokenBy)) }) : t("speaking.tryReplyHint")}
+            >
+              <View style={{ width: layout.compact ? "100%" : 360, maxWidth: "100%" }}>
+                <FieldWithAction
+                  theme={theme}
+                  value={replyText}
+                  placeholder={t("speaking.tryReplyPlaceholder")}
+                  accessibilityLabel={t("speaking.tryReply")}
+                  onChangeText={setReplyText}
+                  onSubmit={() => !tryReply.isPending && st?.tts?.available && tryReply.mutate(replyText)}
+                  action={
+                    <Button
+                      theme={theme}
+                      label={tryReply.isPending ? t("speaking.playing") : t("speaking.play")}
+                      disabled={!st?.tts?.available || tryReply.isPending}
+                      onPress={() => tryReply.mutate(replyText)}
+                    />
+                  }
+                />
+              </View>
+            </SettingsRow>
           </SettingsSection>
 
           {modelManager("tts")}
@@ -685,18 +667,6 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
     </ScrollView>
   );
 }
-
-const CUSTOM = "custom";
-
-/** The six personas' names and genders, for showing a saved persona before the voices load. */
-const PERSONA_NAMES: Record<string, [string, "female" | "male"]> = {
-  "female-higher": ["Mia", "female"],
-  "female-medium": ["Lena", "female"],
-  "female-lower": ["Nora", "female"],
-  "male-higher": ["Leo", "male"],
-  "male-medium": ["Kai", "male"],
-  "male-deep": ["Owen", "male"],
-};
 
 /** "Found: Vulkan (NVIDIA GeForce RTX 3060)." or "No GPU found." */
 function deviceSummary(t: Translate, status: Status | undefined): string | null {
