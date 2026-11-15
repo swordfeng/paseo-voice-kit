@@ -420,3 +420,33 @@ completed an English round trip; first recognition took 1.32 s including 201 ms 
 using Metal. Preferences were unchanged. The plugin was reloaded again after verification
 to leave the installation unloaded; its final reported total was 305 MB, with all three
 speech sites active. These observations do not revalidate other platforms.
+
+## Shared ASR speech filtering (2026-11-14)
+
+Silero filtering now wraps verified local whole-utterance recognizers at the runtime
+boundary, rather than being duplicated inside Whisper and Qwen's Sherpa adapter.
+Whisper, Qwen3-ASR, SenseVoice and Paraformer use it; other Sherpa families and remote
+services keep their original input. Existing 300 ms edge padding and internal pauses
+are unchanged. The filter shares its recognizer's first-use load and idle unload.
+
+Apple M6, no downloads: compared the previous unfiltered SenseVoice int8 and custom
+Paraformer zh-small against the wrapped recognizers using the same local TTS WAVs.
+Seven baseline cases covered Chinese, a quiet Chinese copy rescaled to peak 0.03,
+short Chinese “可以。”, and English on SenseVoice. All seven normalized transcripts
+matched after filtering. Four additional checks passed: each model recognized the
+Chinese clip with 40 seconds leading and 10 seconds trailing silence, and the short
+clip with 10 seconds leading and 2 seconds trailing silence. Each isolated server
+started with recognition unloaded but available. The run had a 120-second budget
+and normal request timeouts; no transfer, timeout or microphone capture occurred.
+
+The 46 native tests passed (3 fixture tests ignored). Real VAD/adapter and Qwen
+missing-dependency recovery fixtures were also run explicitly and passed. The adapter
+fixture verifies that silence/noise skip the recognizer, speech still passes after
+rejection, language/prompt and accelerator are retained, and timing stages survive.
+These short synthetic-speech samples do not establish recall for every language,
+whispered speech, brief interjections or difficult background noise.
+
+The existing four-core-model integration smoke also passed in 10.77 seconds:
+Whisper base and Qwen TTS used actual Metal, Qwen ASR and Supertonic used CPU.
+Qwen ASR's 40/100-second silence regressions, TTS repeated seed and speed checks
+passed. This was a local Mac check, not a new Windows or Linux hardware run.

@@ -1,16 +1,41 @@
 //! Reject non-speech and crop idle microphone audio before speech recognition.
 //! Keep the entire first-to-last speech span, including pauses and 300 ms at either edge.
 
-use std::{ops::Range, path::Path, sync::OnceLock};
+use std::{ops::Range, path::Path, sync::{Arc, Mutex, OnceLock}};
 
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 
-use crate::{audio::Pcm, catalog::{Engine, ModelEntry}};
+use crate::{audio::Pcm, catalog::{Engine, ModelEntry}, engine::{SttEngine, Timings, TranscribeRequest}};
 
 /// These recognizers need speech bounds rather than an accumulated idle microphone buffer.
 pub fn required(entry: &ModelEntry) -> bool {
     entry.engine == Engine::Whisper
-        || (entry.engine == Engine::Sherpa && entry.family.as_deref() == Some("qwen3_asr"))
+        || (entry.engine == Engine::Sherpa && matches!(entry.family.as_deref(), Some("qwen3_asr" | "sense_voice" | "paraformer")))
+}
+
+/// Shared preprocessing for verified local, whole-utterance recognizers. Remote engines
+/// and unverified families keep their original input. One filter lives with each engine,
+/// so idle unloading releases both and startup still loads nothing.
+pub struct FilteredStt {
+    engine: Arc<dyn SttEngine>,
+    filter: Mutex<SpeechFilter>,
+}
+
+impl FilteredStt {
+    pub fn load(engine: Arc<dyn SttEngine>, path: &Path) -> anyhow::Result<Self> {
+        Ok(Self { engine, filter: Mutex::new(SpeechFilter::load(path)?) })
+    }
+}
+
+impl SttEngine for FilteredStt {
+    fn transcribe(&self, req: TranscribeRequest<'_>, timings: &mut Timings) -> anyhow::Result<String> {
+        let audio = timings.time("speech_filter", || self.filter.lock().unwrap_or_else(|p| p.into_inner()).speech(req.audio))?;
+        tracing::info!(input_secs = req.audio.duration_secs(), speech_secs = audio.as_ref().map_or(0.0, |a| a.duration_secs()), "speech filtered");
+        let Some(audio) = audio else { return Ok(String::new()) };
+        self.engine.transcribe(TranscribeRequest { audio: &audio, language: req.language, prompt: req.prompt }, timings)
+    }
+
+    fn accelerator(&self) -> &str { self.engine.accelerator() }
 }
 
 /// Internal resource, not a selectable transcription model. The store can reuse Paseo's copy.
@@ -130,6 +155,29 @@ mod tests {
         }).collect() };
         assert!(filter.speech(&noise).unwrap().is_none());
         assert!(filter.speech(&audio).unwrap().is_some(), "a rejected request must not poison the next request");
+        struct Recorder(Mutex<Vec<usize>>);
+        impl SttEngine for Recorder {
+            fn transcribe(&self, req: TranscribeRequest<'_>, timings: &mut Timings) -> anyhow::Result<String> {
+                assert_eq!(req.language, Some("zh"));
+                assert_eq!(req.prompt, Some("vocabulary"));
+                assert_eq!(req.audio.sample_rate, 16_000);
+                self.0.lock().unwrap().push(req.audio.samples.len());
+                timings.push("recognizer", 0.0);
+                Ok("kept".into())
+            }
+            fn accelerator(&self) -> &str { "test-device" }
+        }
+        let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let wrapped = FilteredStt::load(recorder.clone(), Path::new(&model)).unwrap();
+        assert_eq!(wrapped.accelerator(), "test-device");
+        for (input, expected) in [(&silence, ""), (&noise, ""), (&padded, "kept"), (&audio, "kept")] {
+            let mut timings = Timings::default();
+            let result = wrapped.transcribe(TranscribeRequest { audio: input, language: Some("zh"), prompt: Some("vocabulary") }, &mut timings).unwrap();
+            assert_eq!(result, expected);
+            assert!(timings.0.iter().any(|(stage, _)| *stage == "speech_filter"));
+            assert_eq!(timings.0.iter().any(|(stage, _)| *stage == "recognizer"), !expected.is_empty());
+        }
+        assert_eq!(recorder.0.lock().unwrap().len(), 2, "non-speech never reaches the recognizer");
         eprintln!("input={:.2}s padded={:.2}s trimmed={:.2}s", audio.duration_secs(), padded.duration_secs(), trimmed.duration_secs());
     }
 }

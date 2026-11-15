@@ -360,7 +360,7 @@ impl Runtime {
             Some(self.store.locate(vad).and_then(|i| i.file(vad, "model"))
                 .ok_or_else(|| anyhow::anyhow!("speech activity detector is not installed; pull {} again", entry.id))?)
         } else { None };
-        Ok(match entry.engine {
+        let engine: Arc<dyn SttEngine> = match entry.engine {
             Engine::Whisper => {
                 let path = inst.file(entry, "model").ok_or_else(|| anyhow::anyhow!("{}: files.model missing", entry.id))?;
                 let detector = (entry.id != LANGUAGE_DETECTOR)
@@ -378,15 +378,18 @@ impl Runtime {
                 }
                 let loaded = whisper::WhisperStt::load(&path, detector.as_deref(), self.use_gpu(), self.settings.threads, self.settings.beam_size, coreml);
                 self.compiling.lock().unwrap().remove(&entry.id);
-                Arc::new(loaded?.with_speech_filter(vad_path.as_deref().expect("Whisper VAD dependency"))?)
+                Arc::new(loaded?)
             }
             Engine::Sherpa => {
                 let loaded = sherpa::SherpaStt::load(entry, &inst, self.onnx_provider(), self.settings.threads, self.settings.stt_prompt.as_deref())?;
-                Arc::new(if let Some(path) = vad_path { loaded.with_speech_filter(&path)? } else { loaded })
+                Arc::new(loaded)
             }
             Engine::Openai => Arc::new(RemoteEngine::connect(entry.remote.as_ref().expect("validated"), self.handle.clone())?),
             Engine::Chain | Engine::Mlx | Engine::Gguf => anyhow::bail!("{} is a voice model", entry.id),
-        })
+        };
+        Ok(if let Some(path) = vad_path {
+            Arc::new(crate::speech_filter::FilteredStt::load(engine, &path)?)
+        } else { engine })
     }
 
     fn load_tts(&self) -> anyhow::Result<Arc<dyn TtsEngine>> {
@@ -922,7 +925,9 @@ mod tests {
         settings.stt_models = vec!["sensevoice-int8".into()]; settings.tts_model = "unused".into();
         let store = Store { models_dir: folder.join("private"), reuse_dirs: vec![], shared_models_dir: Some(folder.join("paseo")), paseo_managed: true };
         let rt = Runtime::new(Catalog::load(&[]).unwrap(), store, settings, host.handle().clone());
-        assert!(rt.missing_models().is_empty());
+        // The shared ASR weights remain exclusively Paseo-managed. The small internal
+        // VAD is a separate Voice Kit dependency and may be fetched if not reusable.
+        assert_eq!(rt.missing_models().iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["silero-vad"]);
         let result = host.block_on(rt.downloads.ensure(&rt.store, rt.catalog.find("sensevoice-int8").unwrap()));
         assert!(result.unwrap_err().to_string().contains("managed by Paseo"));
         assert!(rt.downloads.snapshot().is_empty());
@@ -988,6 +993,12 @@ mod tests {
         assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
         custom.family = Some("transducer".into());
         assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        for family in ["sense_voice", "paraformer"] {
+            custom.family = Some(family.into());
+            assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        }
+        custom.engine = Engine::Openai;
+        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"), "remote input stays untouched");
         assert!(rt.missing_models().iter().any(|m| m.id == "silero-vad"));
         // Reusing Paseo's detector must not copy, replace or download that model.
         let shared = dir.join("shared/silero-vad");
