@@ -147,6 +147,13 @@ existing 1200 speech token/96-second generation limits and ten-minute assembled
 output cap remain. These changes are in the source for 0.1.1;
 the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
+The common speech API shortens excessive outer silence after the complete reply
+has been assembled and tempo applied, before WAV/PCM encoding. It applies to all
+local and remote TTS engines. Edges longer than 750 ms retain a 250 ms guard;
+shorter natural edges and internal pauses are untouched. Activity uses sustained
+10 ms RMS windows with a relative threshold for quiet voices, capped at 32 PCM16
+units. Silent or uncertain clips are left unchanged; it does not load another model.
+
 Personas (`options.personas` of the chain) pair similar voices across the enabled models.
 Supertonic's voices were chosen by speaker-embedding similarity (3D-Speaker CAM++,
 `server/examples/voice_embed.rs`) and pitch, over samples from `scripts/voice-samples.sh`.

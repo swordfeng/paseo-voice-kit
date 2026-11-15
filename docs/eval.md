@@ -813,3 +813,25 @@ nonzero trim would miss most of the quiet region. This observation does not yet
 isolate model generation from decoder behavior. A comparison copy retained 250 ms
 around the detected voice, slicing 5.10–10.35 seconds; the original was retained.
 No automatic TTS silence-trimming behavior was added.
+
+### Common TTS output edge-silence handling (2026-11-15)
+
+All models now use one speech-API output policy after complete sentence assembly
+and tempo, before WAV/PCM encoding. Only an outer edge longer than 750 ms is
+shortened, retaining 250 ms around sustained activity. Detection uses 10 ms RMS
+windows, three consecutive active windows, and a threshold of 1% of the largest
+window RMS capped at 32 PCM16 units. The relative threshold protects quiet clips;
+silent/uncertain/non-finite inputs are left unchanged. No model is loaded for this
+step, and internal pauses and PCM samples within the retained region are unchanged.
+
+52 native tests passed (4 local fixtures ignored), including exact preservation
+of an internal 1.5-second pause, quiet speech, a soft attack inside the guard,
+natural edge pauses, all-silent clips and isolated clicks. The four saved A/B
+recordings were checked with the Rust fixture: GGUF baseline 11.52 to 5.27 seconds;
+GGUF instruction 4.88 unchanged; MLX baseline 5.20 unchanged; MLX instruction 4.48
+unchanged. These are boundary/function checks, not general speech-detection scores.
+An actual GGUF Metal HTTP run with instructions explicitly disabled reproduced
+the baseline and returned 5.27 seconds after automatic trimming. Read-back matched
+the sentence, and raw PCM matched the WAV sample data exactly. The rebuilt server
+was deployed with rollback retained; the plugin and live preview succeeded and
+preferences were unchanged. No daemon restart was used.

@@ -10,6 +10,39 @@ pub struct Pcm {
 }
 
 impl Pcm {
+    /// Shorten excessive silence only at the outer edges of a completed TTS reply.
+    /// Keep 250 ms around sustained activity, and leave natural (<750 ms) edges
+    /// and every internal pause untouched. Relative energy protects quiet voices.
+    pub fn trim_tts_edges(mut self) -> Self {
+        let rate = self.sample_rate as usize;
+        if rate == 0 || self.samples.len() < rate * 3 / 4 { return self; }
+        let window = (rate / 100).max(1);
+        let levels: Vec<f64> = self.samples.chunks(window).map(|chunk| {
+            (chunk.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / chunk.len() as f64).sqrt()
+        }).collect();
+        if levels.iter().any(|x| !x.is_finite()) { return self; }
+        let loudest = levels.iter().copied().fold(0.0, f64::max);
+        if loudest == 0.0 { return self; }
+        let threshold = (loudest * 0.01).min(32.0 / 32768.0);
+        let active = |frames: &[f64]| frames.iter().all(|&x| x > threshold);
+        let Some(first) = levels.windows(3).position(active) else { return self; };
+        let last = levels.windows(3).rposition(active).unwrap();
+        let onset = first * window;
+        let offset = ((last + 3) * window).min(self.samples.len());
+        let margin = rate / 4;
+        let excessive = rate * 3 / 4;
+        let start = if onset > excessive { onset.saturating_sub(margin) } else { 0 };
+        let end = if self.samples.len() - offset > excessive {
+            (offset + margin).min(self.samples.len())
+        } else { self.samples.len() };
+        if start == 0 && end == self.samples.len() { return self; }
+        tracing::debug!(leading_ms = start * 1000 / rate,
+            trailing_ms = (self.samples.len() - end) * 1000 / rate, "shortened TTS edge silence");
+        self.samples.truncate(end);
+        self.samples.drain(..start);
+        self
+    }
+
     /// Pitch-preserving tempo for engines without a native rate control. No resampling: the
     /// sample rate and voice pitch stay unchanged. At 1x even the original allocation is kept.
     pub fn with_tempo(mut self, speed: f32) -> anyhow::Result<Self> {
@@ -290,5 +323,74 @@ mod tests {
         let pcm = Pcm { samples: vec![0.1; 2400], sample_rate: 24_000 };
         let back = decode_any(&pcm.to_wav(), Some("wav")).unwrap();
         assert_eq!(back.sample_rate, 24_000);
+    }
+}
+
+#[cfg(test)]
+mod tts_edge_tests {
+    use super::*;
+    const RATE: u32 = 16_000;
+    fn pcm(samples: Vec<f32>) -> Pcm { Pcm { samples, sample_rate: RATE } }
+    fn zeros(seconds: f32) -> Vec<f32> { vec![0.0; (RATE as f32 * seconds) as usize] }
+    fn tone(seconds: f32, amplitude: f32) -> Vec<f32> {
+        (0..(RATE as f32 * seconds) as usize).map(|i|
+            amplitude * (2.0 * std::f32::consts::PI * 200.0 * i as f32 / RATE as f32).sin()).collect()
+    }
+    #[test]
+    fn trims_only_excessive_edges_and_preserves_internal_pause_exactly() {
+        let mut samples = zeros(1.5);
+        samples.extend(tone(0.2, 0.2));
+        samples.extend(zeros(1.5));
+        samples.extend(tone(0.2, 0.2));
+        samples.extend(zeros(2.0));
+        let expected = samples[(RATE as f32 * 1.25) as usize..(RATE as f32 * 3.65) as usize].to_vec();
+        let out = pcm(samples).trim_tts_edges();
+        assert_eq!(out.samples, expected);
+        assert_eq!(out.sample_rate, RATE);
+    }
+    #[test]
+    fn leaves_natural_edges_unchanged_and_retains_quiet_speech_and_attack() {
+        let mut natural = zeros(0.5);
+        natural.extend(tone(0.3, 1e-6));
+        natural.extend(zeros(0.6));
+        assert_eq!(pcm(natural.clone()).trim_tts_edges().samples, natural);
+        let mut quiet = zeros(1.5);
+        let attack = tone(0.15, 0.00001);
+        quiet.extend(&attack);
+        quiet.extend(tone(0.3, 0.2));
+        quiet.extend(zeros(1.5));
+        let out = pcm(quiet).trim_tts_edges();
+        // The soft attack is below the energy threshold, but within the guard.
+        assert!(out.samples.windows(attack.len()).any(|w| w == attack.as_slice()));
+        let mut whisper = zeros(1.0);
+        whisper.extend(tone(0.1, 1e-7));
+        whisper.extend(zeros(1.0));
+        let out = pcm(whisper).trim_tts_edges();
+        assert!((out.duration_secs() - 0.6).abs() < 0.02);
+        assert!(out.peak() > 0.0);
+    }
+    #[test]
+    fn leaves_silent_tiny_and_unreliable_inputs_unchanged() {
+        for samples in [vec![], zeros(2.0), tone(0.02, 0.2)] {
+            assert_eq!(pcm(samples.clone()).trim_tts_edges().samples, samples);
+        }
+        let mut click = zeros(2.0);
+        click[RATE as usize] = 0.5;
+        assert_eq!(pcm(click.clone()).trim_tts_edges().samples, click);
+        let out = Pcm { sample_rate: 0, samples: vec![0.2] }.trim_tts_edges();
+        assert_eq!(out.samples, vec![0.2]);
+        let mut invalid = zeros(2.0); invalid[0] = f32::NAN;
+        assert!(pcm(invalid).trim_tts_edges().samples[0].is_nan());
+    }
+    #[test]
+    #[ignore = "manual recorded WAV check using VOICEKIT_EDGE_INPUT/OUTPUT"]
+    fn recorded_edge_fixture() {
+        let input = std::env::var("VOICEKIT_EDGE_INPUT").unwrap();
+        let output = std::env::var("VOICEKIT_EDGE_OUTPUT").unwrap();
+        let source = decode_wav(&std::fs::read(input).unwrap()).unwrap();
+        let before = source.duration_secs();
+        let trimmed = source.trim_tts_edges();
+        println!("edge_trim before={before:.3} after={:.3}", trimmed.duration_secs());
+        std::fs::write(output, trimmed.to_wav()).unwrap();
     }
 }

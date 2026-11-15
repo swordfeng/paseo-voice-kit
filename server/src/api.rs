@@ -341,6 +341,8 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
         })?;
         // Outside the engine lock. OpenAI `pcm` is raw 24 kHz signed 16-bit little-endian mono.
         let started = Instant::now();
+        // One output policy for every TTS engine, after sentence assembly and tempo.
+        let pcm = pcm.trim_tts_edges();
         let (content_type, bytes) = match format.as_str() {
             "pcm" => ("audio/pcm", pcm.resample(24_000).to_s16le()),
             _ => ("audio/wav", pcm.to_wav()),
