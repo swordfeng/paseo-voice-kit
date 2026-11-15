@@ -531,3 +531,43 @@ voice-quality parity, long-text reliability, every speaker/language, minimum-OS
 compatibility or production packaging. The community Qwen implementation remains
 a dependency to pin and validate; this result is not a claim of library maturity.
 The repeated long first-request stalls need investigation before migration.
+
+### Existing GGUF versus Python MLX: fresh-worker spot check
+
+A subsequent bounded comparison used the installed production GGUF worker and
+the existing Python MLX worker, one at a time on the same M6, with 0.6B
+CustomVoice 4-bit models, Serena and the same English/Chinese phrases above.
+Both workers reported actual Metal. Each was newly launched, but OS file and
+shader caches were not cleared. The first request was English, followed by
+Chinese in the same worker. These are production defaults: GGUF uses temperature
+0.7 / seed 42, while Python MLX uses its existing sampling configuration.
+Q4_K_M and MLX affine 4-bit are different quantizations, and their codec weights
+also differ; this does not isolate framework overhead alone.
+
+| Worker | Load seconds | First English complete seconds, excluding load | Load plus first English seconds | English audio seconds | RSS after English |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GGUF C++ | 1.553 | 1.271 | 2.824 | 2.96 | 2.866 GB |
+| Python MLX | 1.297 | 1.028 | 2.325 | 2.80 | 1.950 GB |
+
+The Chinese requests took 1.151 seconds (GGUF, 2.88 seconds of audio) and 1.164
+seconds (Python MLX, 3.20 seconds of audio). Python MLX emitted its first English
+PCM chunk after 0.178 seconds excluding load. The current GGUF wrapper emits one
+complete PCM frame after synthesis, so its first-chunk and completion times are
+effectively identical. The application currently collects full MLX audio too;
+worker first-chunk timing is not user playback latency.
+
+Memory uses the same `ps` RSS counter for each worker alone, in decimal GB,
+excluding the common plugin/server overhead. These snapshots are not peak or
+unique physical/unified-memory measurements and must not be added to GPU
+allocation counters. GGUF logged a 4096-position talker KV cache of 896 MB before
+any request, illustrating why a smaller quantized file need not have lower
+runtime RSS. No cache configuration was changed. Both workers exited on EOF.
+
+A separate Qwen3-ASR read-back matched both Chinese samples and the Python
+English sample. It rendered the GGUF English sample as “Hello. This is output
+speech test.”; this round trip was not exact and does not identify whether TTS
+or ASR caused the discrepancy. These timings are not a speech-quality comparison.
+
+In this single fresh-worker sample, Python MLX completed the first utterance
+slightly sooner and had lower RSS. This does not establish a universal speed or
+memory ranking, nor does it reproduce the separate Swift first-request stalls.
