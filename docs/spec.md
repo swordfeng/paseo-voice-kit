@@ -1,6 +1,8 @@
-# Voice Kit behavior spec (draft)
+# Voice Kit behavior spec
 
-Status: draft for the 0.1.1 release, reverse-engineered from the working tree on 2026-11-15.
+Status: the 0.1.1 release spec, first reverse-engineered from the implementation and then used
+to fix it (branch `release-spec-fixes`, 2026-11-15). Rules describe the implemented behavior
+unless they carry a `GAP` tag.
 It describes what Voice Kit must do as the user and Paseo see it. The structure lives in
 [architecture.md](architecture.md). Benchmarks live in [eval.md](eval.md).
 
@@ -8,6 +10,7 @@ Each rule has an ID and a verification tag:
 
 - `T:<suite>`: covered by a regression suite in `scripts/run-behavior-tests.mjs` or
   `scripts/test-*.py`.
+- `N:<module>`: covered by the Rust unit tests in `server/src/<module>` (`cargo test`).
 - `+T`: should get an automated test before release.
 - `M`: manual check on the release checklist (end of this file).
 - `(Decided, Qn)`: a behavior chosen by the maintainer (see [Decisions](#decisions)).
@@ -15,8 +18,8 @@ Each rule has an ID and a verification tag:
 - `GAP-En`: a limitation outside Voice Kit, in Paseo.
 - `GAP-n`: the current code does not meet the rule (see [Known gaps](#known-gaps)).
 
-Server rules have not been mapped to the Rust unit tests yet. `+T` on a server rule means
-"confirm a native test exists, or add one".
+Server rules are mapped to the Rust unit tests that cover them. `+T` means no automated test
+covers the rule yet; the list is at the end of the [Release checklist](#release-checklist).
 
 ## 0. Scope
 
@@ -47,19 +50,20 @@ Server rules have not been mapped to the Rust unit tests yet. `+T` on a server r
   cancel an installation another caller needs. `T:supervisor`
 - INST-5 An installed release needs no new approval or download. `T:supervisor`
 - INST-6 When the pinned version changes, Voice Kit installs it into a new version folder.
-  The previous version folder stays on disk. Each version needs its own approval: approval
-  is stored for a specific version and checksum, and the card shows the new version and
-  its source again. Today a single boolean approval carries over to every version.
-  (Decided, Q2.) `+T` `GAP-P3`
-- INST-7 The plugin declares the server version it needs. Voice Kit refuses to start a
-  server that doesn't match, whether it comes from "Binary path", a local build or a stale
-  folder. The status then names the version needed and how to get it, and Paseo keeps its
-  built-in speech. There is no partial compatibility with older servers. (Decided, Q7.)
-  `+T` `GAP-P2`
+  The previous version folder stays on disk. Approval is for one archive: the settings keep
+  its SHA-256 (`approvedServerArchive`), so a new version or platform build shows the card,
+  with its source, again. (Decided, Q2.) `T:supervisor`
+- INST-7 The plugin declares the server version it needs (`SERVER_VERSION` in
+  `plugin/shared/release.ts`, tested equal to `server/Cargo.toml`). Voice Kit refuses to start
+  a server of another version, whether it comes from "Binary path", a local build or the
+  pinned release, and never downloads a pinned release of another version. The status names
+  the version needed and how to get it, and Paseo keeps its built-in speech. There is no
+  partial compatibility with older servers. (Decided, Q7.) `T:supervisor`
 - INST-7a A plugin change that needs a new server lands on the default branch together
   with a published server release and an updated `release.ts`. Users install the plugin
   from the default branch, so otherwise INST-7 would refuse to start for every user until
-  the release exists.
+  the release exists. `scripts/release-manifest.mjs` refuses to pin a release whose version
+  isn't `SERVER_VERSION`. `M`
 - INST-8 On a platform with no published build, the status names the platform and points
   to `dev-install.sh` or "Binary path".
 
@@ -78,10 +82,11 @@ Server rules have not been mapped to the Rust unit tests yet. `+T` on a server r
 - SUP-5 A settings change that needs a restart lets in-flight requests finish for at most
   15 s, then kills the old server. The wait ends as soon as nothing is in flight; model
   loading isn't involved. Plugin shutdown waits at most 1.5 s, then kills the server.
-  (Decided, Q8; today the limit is 185 s, the voice list's 180 s request deadline plus
-  5 s.) `+T`
+  (Decided, Q8.) `+T`
 - SUP-6 On start, the plugin stops servers left behind by an earlier plugin process that
-  serve its models folder. `GAP-P4` (not on Windows)
+  serve its models folder, matching that folder exactly. Processes are listed with `ps` on
+  macOS and Linux and with `Get-CimInstance` on Windows. `T:supervisor` (listing) `M`
+  `GAP-P4` (not yet run on Windows)
 - SUP-7 The server exits when its stdin closes, so it never outlives a killed plugin
   process. `M`
 
@@ -107,7 +112,7 @@ speaking.
   kept. Voice Kit keeps its URL and token current. While the server is down, the user's
   earlier value is used. Voices are chosen per model in Voice Kit (VOI-1), so Voice Kit
   writes a fixed `voice` value to Paseo. Changing the voice in Settings > Voice is not a
-  takeover. `T:speech-switch` (to update for the voice change) `GAP-P8`
+  takeover, and Voice Kit doesn't rewrite it. `T:speech-switch`
 - SITE-6 Voice Kit saves its intent before patching Paseo. A crash at any step can be
   recovered on the next pass without losing the user's previous value. `T:speech-switch`
 - SITE-7 A setting locked by an environment variable on the daemon shows as locked, and
@@ -125,29 +130,35 @@ speaking.
   then, every setting shows "Waiting for a Paseo app to connect". Changes the user makes in
   Settings > Voice are noticed within 15 s. As far as we know, nothing in Paseo uses speech
   before an app connects. Revisit this if that changes. (Decided, Q6.)
-- SITE-12 If `state.json` cannot be read, Voice Kit must not lose track of settings it
-  manages. `GAP-P1`
+- SITE-12 If `state.json` can't be read, Voice Kit stays off, leaves Paseo's settings alone and
+  says why. If it is damaged, it is kept as `state.json.corrupt-*` and replaced. A Paseo
+  setting still pointing at some Voice Kit server (a `vk_` token on a loopback `/v1` address)
+  is never saved as the user's own setting, and it goes back to Paseo's built-in speech when
+  Voice Kit doesn't want it. `T:speech-switch`
 
 ## 4. Listening
 
 - STT-1 The first time the plugin starts on a computer, it picks a default listening model
   and keeps it: Whisper turbo on macOS, Qwen3-ASR when "CPU only" is set, and elsewhere
   the result of a GPU speed probe. A failed or inconclusive probe never stores a CPU
-  default. The probe is retried, with a backoff of 1 min to 10 min. `T:default-stt`
+  default by itself; it is retried with a backoff of 1 min to 10 min, and after three
+  inconclusive probes Qwen3-ASR is stored. `T:default-stt`
 - STT-2 Until the user picks a model, dictation and voice-mode listening use that default.
   A model the user picks is never changed. `T:default-stt`
-- STT-3 While the default is pending, Voice Kit uses Qwen3-ASR temporarily, and this
-  choice is not stored. `GAP-P5`
+- STT-3 While the default is pending, listening stays with Paseo's built-in speech and no
+  listening model is downloaded, so the probe can't make a download wasted. Other startup
+  errors (download approval) still start the server with a temporary model, so they are
+  reported; that model is never stored. `+T`
 - STT-4 Dictation and voice-mode listening may use different models. The server loads
   only the listening models of the features that are on. `+T`
 - STT-5 Every local recognizer gets Silero VAD preprocessing. Audio without speech returns
   empty text. Leading and trailing silence is trimmed, keeping 300 ms at each edge.
-  Remote servers get the original audio. `+T`
+  Remote servers get the original audio. `N:speech_filter` `N:runtime`
 - STT-5a VAD must not drop quiet or short speech that worked before it was added, such as
   a single short word, or speech close to the 0.008 peak gate. VAD needs the Silero model.
   Without it, a local listening model is unavailable and says why, also when offline or
   with automatic downloads off. Once the VAD download finishes, the model recovers without
-  a server restart. `+T` (Windows: 40 s and 100 s leading silence, quiet and short speech,
+  a server restart. `N:speech_filter` `N:runtime` (Windows: 40 s and 100 s leading silence, quiet and short speech,
   internal pauses and concurrent requests passed on 2026-11-14.)
 - STT-5b Paseo's voice mode can upload far more audio than was spoken. On Windows, a
   4.3 s utterance arrived as 104 s of audio. Before VAD, Qwen3-ASR returned the word
@@ -159,10 +170,11 @@ speaking.
   large model's own detection when confidence is below 0.7. `+T`
 - STT-7 A fixed Language setting overrides detection. Vocabulary goes to Whisper as a
   prompt and to Qwen3-ASR as hotwords. `+T`
-- STT-8 Undecodable audio is a client error (4xx), not a server outage (5xx). `GAP-S11`
+- STT-8 Undecodable audio is a client error: 400 `invalid_audio`. Silent audio returns empty
+  text only when the listening model is installed. `+T`
 - STT-9 Transcripts never contain model control text, such as Qwen3-ASR's language header.
   The header is removed by its format, not by deleting the word "language" wherever it
-  appears. `+T`
+  appears. `N:engine::sherpa`
 
 ## 5. Speaking
 
@@ -171,30 +183,30 @@ speaking.
   `T:voice-chain` `T:tts-chain` `T:feature-phase`
 - TTS-2 Text is split into sentences, and each sentence's language is detected. Each run
   goes to the user's first choice for that language, if one is set, and otherwise to the
-  first enabled model that speaks the language natively. `T:voice-chain` `+T`
+  first enabled model that speaks the language natively. `T:voice-chain` `N:engine::chain` `N:lang` `T:voice-chain`
 - TTS-3 If any non-empty run is in a language no enabled model speaks, the whole request
   is refused with `unsupported_language` and nothing is spoken. The page names a model
-  that could speak it. This refusal does not put any model into an error cooldown. `+T`
+  that could speak it. This refusal does not put any model into an error cooldown. `N:engine::chain`
 - TTS-4 Catalan, Tagalog, Swahili and Malay are read with a related language's
   pronunciation only when the user allows it. `T:voice-chain`
 - TTS-5 A model that is cooling down after an error, downloading, or unable to run on this
   computer is skipped in favor of the next model that speaks the language. If none is
-  ready, the request fails with `model_unavailable`. `+T`
-- TTS-6 Errors are handled by kind (decided, Q5; today any synthesis error cools the model
-  down for 60 s, doubling up to 32 min, see `GAP-S8`):
-  - Request errors (the worker reports an error for this input, or the input is invalid)
-    fail only that request. The model stays available and its worker keeps running.
+  ready, the request fails with `model_unavailable`. `N:engine::chain` `N:runtime`
+- TTS-6 Errors are handled by kind (Decided, Q5):
+  - Request errors (the worker or remote server rejects this input) fail only that request.
+    The model stays loaded, its worker keeps running, and there is no cooldown.
   - Timeouts kill the worker, since it may be stuck, and count as a runtime failure. The
     next request starts a new worker.
-  - Runtime failures (worker crash, worker that doesn't start, load failure) count toward a
-    cooldown. The model cools down only after 2 runtime failures in a row, starting at
-    30 s. A success resets the count.
+  - Runtime failures (worker crash, worker that doesn't start, load failure, unreachable
+    remote server) count toward a cooldown. The model cools down only after 2 runtime
+    failures in a row, starting at 30 s and doubling up to 16 min. A success resets the
+    count. Nothing restarts a worker in the background.
   - In the voice list, a failed run moves on to the next model that speaks its language,
     whatever the kind of error.
-  `+T`
-- TTS-6a Text the API accepts must never fail by design. The worker's deadline grows with
-  the number of chunks, with no fixed 180 s total, or the server refuses too-long input up
-  front with a 400. `GAP-S8` `GAP-S9`
+  `N:engine::chain` `N:engine::route` `N:engine::mlx`
+- TTS-6a Text the API accepts doesn't fail by design. A Qwen request gets 60 s per chunk plus
+  30 s, and each chunk is bounded by its frame cap (WRK-5a), so long text doesn't time out
+  for being long. `+T`
 - TTS-7 Voice Kit detects the language of what it reads. Paseo's OpenAI voice provider
   sends only `model`, `voice`, `input` and `response_format` (checked in Paseo's app
   bundle, 2026-11-15), and the preview sends no language either, so no request language
@@ -203,14 +215,15 @@ speaking.
 - TTS-7a Short text must not be refused because its language was misdetected. Replies such
   as "OK.", "Sí." or a bare name or number have to be read, not refused with
   `unsupported_language`. `+T`
-- TTS-8 Each enabled voice model reads with the voice chosen for it (VOI-1). There are no
-  personas spanning models, and no voice matching between models. A voice the model
-  doesn't have falls back to the model's default voice. `+T` `GAP-P8`
+- TTS-8 Each enabled voice model reads with the voice chosen for it (VOI-1), whatever voice the
+  request names. There are no personas spanning models, and no voice matching between
+  models. A voice the model doesn't have falls back to the model's default voice.
+  `N:engine::chain` `T:tts-chain`
 - TTS-9 The Speed setting (0.5–2) applies to every model. Qwen3-TTS changes the tempo
-  after generation and keeps the pitch. `+T`
-- TTS-10 Input is limited to 20 000 characters and output to 10 minutes. A long request
-  either completes or fails clearly. It never stops halfway with a misleading error.
-  `GAP-S9`
+  after generation and keeps the pitch. `N:audio`
+- TTS-10 Input is limited to 20 000 characters and output to 10 minutes. There is no overall
+  voice-list cutoff: each engine bounds its own work, so a long request completes or fails
+  clearly, never dropping the speech already made. `+T`
 - TTS-11 Paseo receives PCM. The preview receives WAV.
 
 ## 6. Models
@@ -219,37 +232,45 @@ speaking.
 
 - MOD-1 Models load on their first request, not at startup. Downloading a model does not
   load it. Each model unloads after being idle for the configured time (10 min by default,
-  0 = never), but never while it is serving a request. `+T`
-- MOD-2 A model that fails to load is retried after a backoff of 30 s, doubling up to
-  240 s. `+T`
-- MOD-3 A model serves one request at a time, and all voice requests share one queue.
-  Waits must be bounded. `GAP-S12`
+  0 = never), but never while it is serving a request. `N:engine::chain` `N:runtime`
+- MOD-2 A model that fails to load is retried after a backoff of 30 s, doubling up to 240 s.
+  Voice-list routes follow TTS-6 instead: only two failures in a row start a cooldown.
+  `N:runtime` `N:engine::route`
+- MOD-3 A model serves one request at a time, and all voice requests share one queue. A
+  request waits at most 3 minutes behind another and 10 minutes for a model that is loading
+  (a first Core ML compile can take minutes), then fails as busy. `+T` `GAP-S12` (work for
+  a client that disconnected still runs to the end)
 
 ### Downloads
 
 - DL-1 With "Download models automatically" on, every configured model that is missing is
   downloaded in the background, one at a time. With it off, models download only when the
-  user asks. `+T`
+  user asks. `N:runtime`
 - DL-2 Every built-in file is checked against a pinned SHA-256, and a file that fails the
-  check is deleted. Files from Hugging Face use the Hub's SHA-256 when one exists. `+T`
-- DL-3 Downloads resume after an interruption, including for models made of several
-  files. `GAP-S4` `GAP-S5`
-- DL-4 A stalled download fails within a bounded time and can be retried. `GAP-S1`
-- DL-5 A failed download shows its error, and pulling the model retries it. A download
-  that finishes but leaves the model incomplete is reported as a failure, not retried in a
-  loop. `GAP-S2` `GAP-S7`
-- DL-6 Removing a model that is downloading either cancels the download or is refused.
-  `GAP-S3`
-- DL-7 Interrupted downloads leave no files behind indefinitely. `GAP-S6`
-- DL-8 Pulling a model that is already installed or downloading starts nothing new.
-  `T:http-recovery` (chain) `GAP-S18`
+  check is deleted. Files from Hugging Face use the Hub's SHA-256 when one exists. `N:download` (verification of a complete file) `+T`
+- DL-3 Downloads resume after an interruption. For a model made of several files, finished
+  files are kept while the entry's downloads stay the same, and partial files are named by
+  their position in the entry (`<id>~<n>~<name>.part`), so files with the same name in
+  different folders never share one. `N:download`
+- DL-4 A download fails if connecting takes over 15 s or the connection sends nothing for
+  60 s, and it can then be retried. `+T`
+- DL-5 A failed download shows its error, and pulling the model retries it. A download that
+  finishes but leaves the model incomplete is a failure like any other. A failed automatic
+  download is retried after 5 minutes, not on every request. `N:download`
+- DL-6 Removing a model that is downloading is refused (409 `download_in_progress`). `+T`
+- DL-7 A model's partial files are deleted when it installs or is removed. At startup, before
+  any download, partial files untouched for 7 days and files in the old naming are deleted.
+  `N:download` (after install) `+T` (startup)
+- DL-8 Pulling a model that is already installed or downloading starts nothing new. Pulling
+  the voice list skips models that can't run on this computer. `T:http-recovery`
 
 ### Deleting models
 
 - DEL-1 A model in use (configured, part of the voice list, or the language detector)
   cannot be removed.
 - DEL-2 Voice Kit never deletes or writes files it reads from elsewhere: Paseo's reuse
-  folder and the user's own model folders. `GAP-S15` (Core ML encoder)
+  folder and the user's own model folders. Models there get no Core ML encoder, since it
+  would be unpacked next to them. `+T`
 
 ### Models shared with Paseo
 
@@ -259,10 +280,11 @@ speaking.
 - SHR-2 Removing a shared model is refused while Paseo or Voice Kit uses it, and while it
   is downloading. `T:paseo-models`
 - SHR-3 An earlier private copy is moved into Paseo's folder, or deleted once its files
-  are verified to match. Voice Kit never re-adopts a model that was removed through Paseo.
+  are verified to match; a copy that differs is kept. Removing the model removes Voice Kit's
+  private copy too. Voice Kit never re-adopts a model that was removed through Paseo.
   `T:paseo-models`
 - SHR-4 If Paseo's model folder is not an absolute path, sharing is disabled rather than
-  guessed. `+T`
+  guessed. `T:paseo-models`
 
 ### Custom models
 
@@ -270,9 +292,9 @@ speaking.
   OpenAI-compatible server, a Whisper `.bin` file (path or URL), a sherpa-onnx folder or
   archive, a GGUF Qwen3-TTS pair, or an MLX Qwen3-TTS model. `T:mlx-catalog` `M`
 - CUS-2 An incomplete or invalid custom model still shows, as unavailable with its reason.
-  It never breaks the server's startup or the other models. `+T`
+  It never breaks the server's startup or the other models. `N:runtime`
 - CUS-3 Custom models are written to an owner-only catalog file. A change restarts the
-  server. A custom model's id cannot replace a built-in model. `+T`
+  server. A custom model's id cannot replace a built-in model. `N:catalog` `T:model-keys`
 - CUS-4 A voice model joins the voice list only with the languages it speaks. Qwen3-TTS
   always has its 10. `T:tts-chain`
 - CUS-1a The custom model families the server supports, the ones the add form offers, and
@@ -290,13 +312,15 @@ speaking.
     same reason.
   - Later, outside 0.1.1: phonemization through a separate helper process, so these
     families can work (see [Later work](#later-work)).
-  `+T` `GAP-S23`
-- CUS-1b Picking the files of a sherpa-onnx folder or archive ignores Git LFS pointer files
-  and empty files. A MeloTTS package contains a 133-byte `model.int8.onnx` pointer, and
-  automatic detection picked it over the real model. `GAP-S22`
+  Refused at Hugging Face lookup and at load, with the reason. `M` `+T`
+- CUS-1b Picking the files of a sherpa-onnx folder or archive ignores files under 1 KB, such
+  as Git LFS pointers. A MeloTTS package contains a 133-byte `model.int8.onnx` pointer that
+  detection used to pick over the real model. Moonshine (v1 and v2 layouts) is detected
+  too. `N:catalog`
 - CUS-5 A remote server receives the audio and text for its model, with the user's API
-  key. Transport errors and 401/403/404/408/429/5xx mark a remote listening model as
-  unavailable. Remote voice failures have to behave the same way. `GAP-S11`
+  key. For listening and speaking alike, transport errors and 401/403/404/408/429/502/503/504
+  mark the model unavailable (a runtime failure, TTS-6); other errors fail only that
+  request. `N:runtime` (listening) `+T`
 
 ### Acceleration
 
@@ -305,30 +329,31 @@ speaking.
   Every sherpa-onnx engine runs on the CPU on all platforms, including Qwen3-ASR,
   Supertonic 3, Parakeet and SenseVoice. CUDA and DirectML are not offered. The docs and
   the UI must not suggest otherwise. `M`
-- ACC-2 Status shows the backend that actually runs, never the one requested. On Windows,
-  a sherpa-onnx model asked to use CUDA or DirectML falls back to the CPU, but its status
-  still shows the requested name. `GAP-S20`
+- ACC-2 Status shows the backend that actually runs, never the one requested. The bundled
+  sherpa-onnx builds run on the CPU everywhere, so every sherpa-onnx model reports `cpu`,
+  also when Core ML, CUDA or DirectML was requested. `+T`
 
 ## 7. Worker processes (GGUF and MLX)
 
 - WRK-1 Qwen3-TTS GGUF and MLX run in child processes, connected over stdin and stdout
   with no listening port. Unloading the model or stopping the server ends the process.
 - WRK-2 A worker must report ready within 90 s (GGUF) or 30 s (MLX). Errors, timeouts
-  and crashes are handled as in TTS-6. `+T`
+  and crashes are handled as in TTS-6. `N:engine::mlx`
 - WRK-3 MLX models are offered only on Apple Silicon running macOS 14 or later, with
   acceleration not set to "CPU only", and only when the bundled helper (`mlx-runtime/` with
   `runtime.json` protocol 1) is present. Otherwise the model shows why it can't run.
   `T:mlx-runtime`
 - WRK-4 Checking whether MLX is available never starts a worker or loads a model.
   `T:mlx-runtime`
-- WRK-5 Background retries do not load models no request is waiting for. `GAP-S14`
+- WRK-5 Nothing restarts a worker in the background: after any cooldown, the next request
+  starts it, so no GPU memory is held while nobody is waiting for speech. `N:engine::mlx`
 - WRK-5a Qwen3-TTS generation ends normally. Sampling is temperature 0.4 and seed 42 on
   both backends (0.2 often never reached the end token; eval.md). Each chunk's frame cap
   follows its token count (0.8 s per token plus 4 s, at most 1200 frames), so a generation
   that doesn't end fails within seconds with `token_limit`. It is then retried once with
   another fixed seed at the same temperature. Windows Vulkan 0.6B Q4 also bypasses MMVQ
   (`8462720`); that workaround's root cause is unknown and covers Windows only. Linux Vulkan
-  and AMD/Intel GPUs are unchecked. `M` (Decided 2026-11-15.)
+  and AMD/Intel GPUs are unchecked. `N:engine::qwen` `M` (Decided 2026-11-15.)
 - WRK-6 No released build used a Python MLX runtime, so Voice Kit neither looks for nor
   migrates one. The only one, on the development Mac, was moved to the Trash on 2026-11-15.
   (Decided, Q9.)
@@ -337,30 +362,35 @@ speaking.
 
 - VOI-1 Voices are chosen on each enabled voice model's card, from that model's own voices.
   Language and gender are shown where the model provides them, and frequently used voices
-  come first. A long list (Kokoro v1.1 has 103 voices) can be filtered by language and
-  gender, and on a compact layout opens as a searchable sheet. `GAP-P8`
-- VOI-2 A model with one voice (MeloTTS, a remote server) shows that voice as text, not as
-  a picker. A remote server's voice is changed in its model settings. Until a model's
-  voices are known, the card says they can be chosen after the download. A model whose
-  catalog lists its voices (Supertonic, Qwen3-TTS) shows them right away.
+  come first. A list of more than 12 voices (Kokoro v1.1 has 103) gets language and gender
+  filters. `M`
+- VOI-2 A model with one voice (MeloTTS) shows that voice as text, not as a picker; a remote
+  server's voice is changed in its model settings. Voices the catalog lists (Supertonic,
+  Qwen3-TTS) show right away. Other models' voices are known once the model has loaded:
+  until then the card says one preview loads them, and the server remembers them from then
+  on (`.voices.json` in the models folder), also while the model is unloaded and after a
+  restart. A model that isn't downloaded yet says its voices come after the download.
+  `N:runtime` `M`
 - VOI-3 Default voices for new installs: Supertonic F1 and Qwen3-TTS serena. Serena's
   closest Supertonic voice is F1 in every measured sentence (eval.md, "Serena follow-up"),
   so a mixed-language reply sounds like one speaker by default. This replaces the
   former "Mia" default (F1 and vivian). A custom model starts with its default voice, or
   else its first. (Decided 2026-11-15.)
-- VOI-4 Each enabled card has a play button. It reads one line with this model, its chosen
-  voice and the current speed, without the voice list's routing. The language is the
-  speech Language setting if the model speaks it, or else the model's first language.
-  Models that aren't enabled have no play button in 0.1.1.
+- VOI-4 Each enabled card has a play button. It reads one line with this model, the voice
+  picked on the card (before the choice is saved) and the current speed, without the voice
+  list's routing. The language is the speech Language setting if the model speaks it, or
+  else the model's first language. Models that aren't enabled have no play button in
+  0.1.1. `N:engine::chain` `M`
 - VOI-5 The top of the Speaking tab has only Speed, which applies to every model, and "Try a
-  reply". It takes editable text, mixed-language by default, and runs it through the whole
-  voice list. Afterwards it shows which model and voice read each sentence.
+  reply": a text field with its play button right after it (empty text reads a sample
+  line), run through the whole voice list. Afterwards it says which model and voice read
+  each part. `M`
 - VOI-6 Removed: the persona picker, the `custom` pairing mode and the "show all voices"
   switch.
-- VOI-7 Server: the voice list takes a model → voice map instead of personas. A speech
-  request can name one model of the list for a card preview; today a request for a single
-  model id is silently served by the whole list. "Try a reply" reports which model read
-  each run.
+- VOI-7 Server: the voice list takes a model → voice map (`options.model_voices`) instead of
+  personas. A speech request can name one model of the list (`voicekit_route`) for a card
+  preview, and every voice-list response reports which model, voice and language read each
+  part (`x-voicekit-runs`, ids only). `N:engine::chain`
 - VOI-8 No migration: nothing has been released to users (S-0). Old `voice` and
   `modelVoices` values are dropped by the new schema, and the two test machines are reset
   by hand.
@@ -387,16 +417,19 @@ speaking.
   GPU's usage. `T:memory` `T:sidebar-memory`
 - SET-7 A settings change made on one client, or stored on the host, shows on every other
   client without a plugin reload, as Paseo's persisted settings promise. A Mac client
-  viewing the Windows host showed "CPU only" after the host had saved "Automatic", until
-  the plugin was reloaded. The cause is not known, and could be in Paseo. `GAP-P7`
+  viewing the Windows host once showed "CPU only" after the host had saved "Automatic",
+  until the plugin was reloaded. The probable cause, not reproduced: a save that never
+  answered kept its value on screen. Saves now time out after 15 s, are reported, and the
+  host's values show again. `T:settings-writer` `M`
 
 ## 9. Server HTTP interface and security
 
 - API-1 Every request whose `Host` is not a loopback host is rejected with 421. `+T`
 - API-2 Every endpoint except `/health` requires the bearer token, compared in constant
   time. `+T`
-- API-3 Errors use OpenAI's error format, including rejections of malformed requests.
-  `GAP-S11`
+- API-3 Errors use OpenAI's error format, including rejections of malformed requests and
+  unknown routes, which also get the loopback check. A speech request without
+  `response_format` gets a 400 that names pcm and wav. `+T`
 - API-4 Paseo's `config.json`, `state.json` and the custom model catalog are written
   owner-only (`0600`), atomically.
 - API-5 Keys can be written but not read back, as in Paseo, whose speech settings show
@@ -410,7 +443,7 @@ speaking.
     can replace or clear it, but never shows it.
   - The server catalog gets the key from that file. Keys in existing test settings are
     re-entered by hand; there is no migration (S-0).
-  (Decided, Q10.) `+T` `GAP-P6`
+  (Decided, Q10.) `T:model-keys`
 
 ---
 
@@ -462,6 +495,8 @@ disconnects, S21 outside the measured models, and E1 (Paseo). **P** is the plugi
 | P4 | Windows: leftover servers are never found or stopped (`findOurServers` returns `[]`). The new server moves to a random port, and the old one keeps its memory. Windows is officially supported, so this has to be fixed. **Fixed in code:** Windows lists `voicekit.exe` processes with `Get-CimInstance`; the folder must match exactly (this also fixed a prefix match on every platform). Not yet run on Windows. | High |
 | P5 | While the default listening model is pending, Qwen3-ASR is used and, with automatic downloads, downloaded. When the probe later picks Whisper, the first download was unnecessary. **Fixed:** while the GPU check is pending, listening stays with built-in speech (nothing is downloaded); after three inconclusive checks the CPU model becomes the default. | Low |
 | P6 | Remote-server API keys are stored in the plugin settings (`customModels[].apiKey`), so every connected Paseo app can read them in plain text. `secureTextEntry` only hides typing. **Fixed:** keys live in `model-keys.json` (0600) and reach only the server catalog; settings keep `hasApiKey`; the add form and the editor send keys through `voicekit.models.set-key`; keys of removed models are deleted. | High |
+| P7 | A settings change didn't reach another client until the plugin was reloaded (SET-7). The cause is unknown and could be in Paseo. **Probable cause fixed (not reproduced):** a save that never answered kept its old value on screen forever; saves now time out after 15 s, are reported, and the host's values show again. | Medium |
+| P8 | Voices are chosen through personas that pair voices across models. Only Supertonic and Qwen3-TTS are paired. Every other model gets an empty voice for all six personas, so the server falls back to speaker 0: for Kokoro v1.1 an English female voice, even for male personas and Chinese text. To be replaced by per-model voices (VOI-1 to VOI-9). **Fixed:** per-model voices on each enabled card (filters for long lists, a preview per card), "Try a reply" listing the models and voices used, defaults F1 / serena, and a fixed `voice` in Paseo whose edits aren't a takeover. | High |
 | S1 | Model downloads have no timeout. A stalled transfer stays "downloading" forever and can't be cancelled (`download.rs` `fetch`). **Fixed:** 15 s connect timeout; a connection that sends nothing for 60 s fails and can be retried. | High |
 | S2 | When a download succeeds but the model is still incomplete, progress is marked done with no error. On every voice request, `lazy_route` starts the download again (`download.rs` `ensure`, `runtime.rs` `lazy_route`). **Fixed:** recorded as a failed download, not retried on every request. | High |
 | S3 | Removing a model during its download either lets the download reinstall it, or allows a second, parallel download into the same files. **Fixed:** removal is refused (409 `download_in_progress`) while the model downloads. | Medium |
@@ -479,8 +514,6 @@ disconnects, S21 outside the measured models, and E1 (Paseo). **P** is the plugi
 | S15 | Core ML encoders are unpacked next to the model, which can be a borrowed, read-only folder. **Fixed:** models in borrowed folders get no Core ML encoder. | Medium |
 | S16 | Model ids `.` and `..` pass catalog validation, and removing such a model would delete a parent folder. Only hand-written catalogs can do this; the plugin restricts ids. **Fixed:** ids must start with a letter or digit; file paths must be relative. | Low |
 | S18 | Pulling the voice list always returns 202 and starts a new task, including downloads of models that can't run on this computer. **Fixed:** pulling the list starts nothing when every missing model is already downloading, and skips models that can't run here. | Low |
-| P7 | A settings change didn't reach another client until the plugin was reloaded (SET-7). The cause is unknown and could be in Paseo. **Probable cause fixed (not reproduced):** a save that never answered kept its old value on screen forever; saves now time out after 15 s, are reported, and the host's values show again. | Medium |
-| P8 | Voices are chosen through personas that pair voices across models. Only Supertonic and Qwen3-TTS are paired. Every other model gets an empty voice for all six personas, so the server falls back to speaker 0: for Kokoro v1.1 an English female voice, even for male personas and Chinese text. To be replaced by per-model voices (VOI-1 to VOI-9). **Fixed:** per-model voices on each enabled card (filters for long lists, a preview per card), "Try a reply" listing the models and voices used, defaults F1 / serena, and a fixed `voice` in Paseo whose edits aren't a takeover. | High |
 | S19 | Silent audio returns 200 with empty text even when the listening model is missing or unknown. **Fixed:** silence returns empty text only when the listening model is installed. | Low |
 | S20 | A model's status shows the requested accelerator (CUDA, DirectML) even after a fallback to the CPU (ACC-2). **Fixed:** sherpa-onnx models report `cpu`. | Medium |
 | S21 | Qwen3-TTS 0.6B Q4 runs to the 1200-frame cap on Windows Vulkan, and also on macOS Metal (sohee and serena on short English sentences at temperature 0.2, seed 42; see eval.md). It is worked around, not fixed, and the workaround covers Windows only. A sampler fed non-finite values can fall through to the last token and never reach EOS (WRK-5a). **Fixed (2026-11-15):** temperature 0.4 (0.2 caused most of it), a frame cap from each chunk's token count so a generation that never ends fails in seconds, and one retry with another seed at the same temperature; reported as `token_limit`. In the eval.md sample every case finished after the retry; it isn't guaranteed. | Medium |
@@ -525,7 +558,7 @@ step, and confirm GPU use wherever acceleration is expected.
 7. Custom models: one of each source type, including an invalid one (CUS-2).
 8. Speaking: mixed-language text, an unsupported language refused, an allowed approximate
    reading, speeds 0.5, 1 and 2, idle unload and the next load.
-9. MLX (if it is in scope, Q1): the helper is detected, a CustomVoice model loads on the
+9. MLX: the helper is detected, a CustomVoice model loads on the
    GPU, Activity Monitor or the server's device report shows the GPU in use, and unloading
    ends the worker.
 10. Windows and Linux (blocking, S-2):
@@ -543,3 +576,9 @@ step, and confirm GPU use wherever acceleration is expected.
 11. Intel Mac: Whisper turbo on Metal (the default there) actually uses the GPU and is
     fast enough. Otherwise its default listening model needs the same GPU probe as Linux
     and Windows.
+
+### Rules without an automated test
+
+These rules carry `+T`: they are checked by hand on this list, or not yet at all. 26 as of 2026-11-15:
+
+SUP-1, SUP-3, SUP-4, SUP-5, SITE-7, STT-3, STT-4, STT-6, STT-7, STT-8, TTS-6a, TTS-7a, TTS-10, MOD-3, DL-2, DL-4, DL-6, DL-7, DEL-2, CUS-1a, CUS-5, ACC-2, SET-4, API-1, API-2, API-3.
