@@ -662,3 +662,36 @@ cost remains possible after a cache miss or version/device change; ordinary
 fixed-seed fresh-process requests in the final checks were fast. No model warmup
 was added to application startup. Production packaging, runtime selection and
 removal of the Python setup flow remain separate implementation work.
+
+## Bundled native MLX migration (2026-11-15)
+
+The production MLX path now uses the bundled Swift worker. The Python worker and
+installer were removed. Native packages include the Metal library, resource
+bundles, relocated Swift compatibility dylibs and upstream notices. Model weights
+remain separate. The pinned loader additionally constructs tokenizers in memory
+and never writes or removes model directories. Generation defaults to seed 42.
+
+47 native tests passed (3 local-fixture tests ignored), as did plugin typechecking,
+behavior checks, four Python build tests, plugin-package compilation and native
+archive extraction/dependency checks. The four-core-model smoke passed in 12.51 s;
+Whisper and GGUF used Metal. The new bounded native HTTP check passed from both
+the relocated archive and installed binaries with Python paths disabled: English
+and Chinese round trips, repeat-identical audio, and speed 1.25 (2.80 to 2.24 s).
+The model began unloaded. A private model clone without tokenizer.json had
+read-only permissions and its file inventory/metadata remained unchanged.
+Additional single English samples from 0.6B 8-bit and 1.7B 4-bit weights ran on
+Metal and transcribed correctly. The first newly packaged run still showed cold
+compilation delay; no startup model warmup was introduced.
+
+Dyld diagnostics confirmed the compatibility dylib loaded from the extracted
+package, with no toolchain dylib dependency. The locally built archive was about
+32 MB. This was tested on M6/macOS 27; the target minimum remains macOS 14, without
+a new real-device macOS 14 or remote CI run. Claude checked real client components
+in a temporary harness at desktop/compact widths and light/dark themes, including
+ready/error states; this was not a native-app installation E2E on other platforms.
+
+The packaged binary and plugin sources were deployed locally with rollback copies.
+The live plugin reported running, all three speech sites active, and the native
+MLX helper ready. Installed-binary MLX HTTP checks and live preview/Whisper Metal
+recognition passed. Plugin preferences were unchanged. A final plugin reload left
+all configured models unloaded. No Paseo daemon restart, push or release occurred.
