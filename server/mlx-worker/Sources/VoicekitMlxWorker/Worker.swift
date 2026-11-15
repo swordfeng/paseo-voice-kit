@@ -31,6 +31,15 @@ struct Failure: Error, CustomStringConvertible {
     init(_ description: String) { self.description = description }
 }
 
+// Opt-in diagnostics never include request text and never use framed stdout.
+func profile(_ event: String, _ fields: [String: Any] = [:]) {
+    guard ProcessInfo.processInfo.environment["VOICEKIT_MLX_PROFILE"] == "1" else { return }
+    var fields = fields
+    fields["profile"] = event
+    guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) else { return }
+    try? FileHandle.standardError.write(contentsOf: data + Data([10]))
+}
+
 @main enum Worker {
     static func main() async {
         // Upstream logging must not corrupt the binary protocol.
@@ -72,16 +81,31 @@ struct Failure: Error, CustomStringConvertible {
                         guard voices.contains(voice) else { throw Failure("unsupported speaker") }
                         let language = request.language.flatMap { languages[$0] } ?? "Auto"
                         let started = Date()
+                        profile("request", ["characters": request.text.count])
                         var first = true
                         var count = 0
                         var ended = false
+                        var tokens = 0
                         // Match the Python worker's sampling defaults; do not claim seed parity.
                         let parameters = GenerateParameters(maxTokens: 1200, temperature: 0.9, topP: 1, topK: 50, repetitionPenalty: 1.05)
+                        if let value = ProcessInfo.processInfo.environment["VOICEKIT_MLX_SEED"], let seed = UInt64(value) {
+                            MLXRandom.seed(seed)
+                        }
                         for try await event in model.generateStream(text: request.text, voice: voice,
                                 refAudio: nil, refText: nil, language: language,
                                 generationParameters: parameters, streamingInterval: 0.4) {
-                            if case .token(let token) = event { ended = token == eos }
+                            if case .token(let token) = event {
+                                ended = token == eos
+                                tokens += 1
+                                if tokens <= 8 {
+                                    profile("token", ["index": tokens, "ms": Date().timeIntervalSince(started) * 1000])
+                                }
+                            }
+                            if case .info(let info) = event {
+                                profile("generation", ["tokens": info.generationTokenCount, "seconds": info.generateTime])
+                            }
                             if case .audio(let chunk) = event {
+                                profile("audio", ["samples_before": count, "ms": Date().timeIntervalSince(started) * 1000])
                                 let samples = chunk.asArray(Float.self)
                                 count += samples.count
                                 guard count < 24_000 * 96 else { throw Failure("speech token or audio limit reached") }

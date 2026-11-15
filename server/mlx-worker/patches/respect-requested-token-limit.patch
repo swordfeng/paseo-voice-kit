@@ -1,0 +1,16 @@
+diff --git a/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift b/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
+--- a/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
++++ b/Sources/MLXAudioTTS/Models/Qwen3TTS/Qwen3TTS.swift
+@@ -381,9 +381,9 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Sendable {
+             refCodes = nil
+         }
+ 
+-        // Cap max tokens based on text length
+-        let targetTokenCount = tokenizer.encode(text: text).count
+-        let effectiveMaxTokens = min(maxTokens, max(75, targetTokenCount * 6))
++        // Respect the caller's explicit budget. Text length does not establish
++        // an upper bound on speech duration, especially for short Chinese text.
++        let effectiveMaxTokens = maxTokens
+ 
+         // Initialize cache and timing
+         let startTime = Date()

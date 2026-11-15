@@ -7,12 +7,17 @@ Rust engine or installed by Voice Kit. Production MLX requests still use Python.
 Build on Apple Silicon with Xcode (including its Metal Toolchain):
 
 ```sh
-swift build --package-path server/mlx-worker -c release --product voicekit-mlx-worker -j 8
+python3 server/mlx-worker/build.py
 ```
 
 Keep the complete build product directory when running the executable: MLX also
 needs the generated Metal resource bundle. `Package.resolved` pins transitive
 Swift dependencies.
+
+The build helper applies the tracked token-limit patch to the pinned audio
+library, verifies its revision, and enforces a build deadline. Running SwiftPM
+directly on a fresh checkout skips this patch. The patch makes Qwen respect the
+caller's token budget instead of silently reducing it for short inputs.
 
 Pass a **disposable, private copy** of a compatible MLX CustomVoice model folder:
 
@@ -44,7 +49,17 @@ python3 server/mlx-worker/smoke.py python --python /path/to/venv/bin/python --mo
 ```
 
 The run has bounded load, request and exit deadlines. Failure terminates only the
-owned worker process group. It saves WAVs, stderr and a JSON report. Transcribe or listen to the saved
-WAVs separately: successful framing alone does not establish correct speech.
+owned worker process group. It saves WAVs, stderr and a JSON report. Transcribe or
+listen to the saved WAVs separately: successful framing alone does not establish
+correct speech. `--language zh` selects the short Chinese test alone.
+
+`VOICEKIT_MLX_PROFILE=1` enables text-free token/audio timing on stderr.
+`VOICEKIT_MLX_SEED=42` fixes the worker's random state for controlled tests; the
+upstream Qwen path does not forward `GenerateParameters.seed` itself. Neither
+setting changes the existing production Python engine.
+
+`diagnostics/metal-compile-timers.patch` is an optional, non-production probe for
+the MLX C++ submodule. The normal build helper does not apply it. See the
+evaluation notes for the controlled cold-source experiment and its limitations.
 
 Measurements and validation results belong in [docs/eval.md](../../docs/eval.md).

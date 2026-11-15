@@ -1,0 +1,76 @@
+diff --git a/mlx/backend/metal/device.cpp b/mlx/backend/metal/device.cpp
+index 493e8e315..979b3f257 100644
+--- a/mlx/backend/metal/device.cpp
++++ b/mlx/backend/metal/device.cpp
+@@ -1,6 +1,9 @@
+ // Copyright © 2023-2024 Apple Inc.
+ 
+ #include <cstdlib>
++#include <chrono>
++#include <cstdio>
++#include <unistd.h>
+ #include <sstream>
+ 
+ #include <fmt/format.h>
+@@ -679,8 +682,12 @@ NS::SharedPtr<MTL::Library> Device::build_library_(
+     const CompileOptions& compile_options) {
+   auto pool = new_scoped_memory_pool();
+ 
++  std::string profile_code = source_string;
++  if (std::getenv("VOICEKIT_MLX_COLD_SOURCE")) {
++    profile_code = "// Voice Kit diagnostic cold-source nonce " + std::to_string(getpid()) + "\n" + profile_code;
++  }
+   auto ns_code =
+-      NS::String::string(source_string.c_str(), NS::ASCIIStringEncoding);
++      NS::String::string(profile_code.c_str(), NS::ASCIIStringEncoding);
+ 
+   NS::Error* error = nullptr;
+   auto options = MTL::CompileOptions::alloc()->init()->autorelease();
+@@ -762,6 +769,7 @@ NS::SharedPtr<MTL::ComputePipelineState> Device::get_kernel_(
+     const std::string& name,
+     const MTL::Function* mtl_function) {
+   // Compile kernel to compute pipeline
++  const auto profile_start = std::chrono::steady_clock::now();
+   NS::Error* error = nullptr;
+   NS::SharedPtr<MTL::ComputePipelineState> kernel;
+ 
+@@ -770,6 +778,10 @@ NS::SharedPtr<MTL::ComputePipelineState> Device::get_kernel_(
+         NS::TransferPtr(device_->newComputePipelineState(mtl_function, &error));
+   }
+ 
++  if (std::getenv("VOICEKIT_MLX_PROFILE")) {
++    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - profile_start).count();
++    if (ms > 5) std::fprintf(stderr, "[metal-profile] pipeline %s %.3f ms\n", name.c_str(), ms);
++  }
+   // Throw error if unable to compile metal function
+   if (!mtl_function || !kernel) {
+     std::ostringstream msg;
+@@ -806,10 +818,15 @@ NS::SharedPtr<MTL::ComputePipelineState> Device::get_kernel_(
+   desc->setLinkedFunctions(linked_functions);
+ 
+   // Compile kernel to compute pipeline
++  const auto profile_start = std::chrono::steady_clock::now();
+   NS::Error* error = nullptr;
+   auto kernel = NS::TransferPtr(device_->newComputePipelineState(
+       desc, MTL::PipelineOptionNone, nullptr, &error));
+ 
++  if (std::getenv("VOICEKIT_MLX_PROFILE")) {
++    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - profile_start).count();
++    if (ms > 5) std::fprintf(stderr, "[metal-profile] pipeline %s %.3f ms\n", name.c_str(), ms);
++  }
+   // Throw error if unable to compile metal function
+   if (!kernel) {
+     std::ostringstream msg;
+@@ -839,7 +856,12 @@ MTL::Library* Device::get_library(
+     return it->second.get();
+   }
+ 
++  const auto profile_start = std::chrono::steady_clock::now();
+   auto mtl_lib = build_library_(builder(), compile_options);
++  if (std::getenv("VOICEKIT_MLX_PROFILE")) {
++    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - profile_start).count();
++    std::fprintf(stderr, "[metal-profile] library %s %.3f ms\n", name.c_str(), ms);
++  }
+   library_map_.insert({name, mtl_lib});
+   return mtl_lib.get();
+ }

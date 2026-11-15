@@ -79,6 +79,8 @@ def run(args):
             print(json.dumps({"ready": result}, ensure_ascii=False), flush=True)
             samples = [("en", "Hello, this is a speech test."),
                        ("zh", "你好，这是一个语音测试。")]
+            if args.language:
+                samples = [(code, text) for code, text in samples if code == args.language]
             for language, text in samples[:1] if args.single else samples:
                 started = time.monotonic()
                 request = {"text": text, "voice": "serena", "language": language}
@@ -142,6 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--python", type=Path, help="existing private mlx-audio Python interpreter")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--single", action="store_true", help="English only")
+    parser.add_argument("--language", choices=["en", "zh"], help="test one language only")
     args = parser.parse_args()
     if args.backend == "python" and args.python is None:
         parser.error("--python is required for the Python baseline")

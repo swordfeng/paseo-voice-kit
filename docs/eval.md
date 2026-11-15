@@ -530,7 +530,8 @@ weights and remove Python from this inference path. It does not establish
 voice-quality parity, long-text reliability, every speaker/language, minimum-OS
 compatibility or production packaging. The community Qwen implementation remains
 a dependency to pin and validate; this result is not a claim of library maturity.
-The repeated long first-request stalls need investigation before migration.
+Follow-up instrumentation and a controlled cold-compilation comparison are
+recorded below.
 
 ### Existing GGUF versus Python MLX: fresh-worker spot check
 
@@ -593,3 +594,71 @@ Valid-token occupancy, live allocation, allocator-reusable cache, and OS RSS are
 different concepts. The 0.916 GB RSS difference above does not establish an
 intrinsic 32% memory advantage for MLX at every sequence length, nor was its
 entire difference attributed experimentally to KV alone.
+
+### Swift follow-up: cold Metal compilation and token budget
+
+The earlier stalls were investigated rather than treated as evidence that Swift
+cannot run the model. This remained an isolated experiment on the M6; the live
+plugin and its Python runtime were not switched. Its Python MLX version is
+0.32.4, while the Swift package uses MLX 0.33.0, so neither runtime nor cache
+history was identical in the earlier cross-framework comparison.
+
+Opt-in worker diagnostics now record first token, audio arrival and generation
+time on stderr without logging request text. `VOICEKIT_MLX_SEED=42` explicitly
+seeds the MLX random state before each request. The pinned Qwen Swift path does
+not itself forward `GenerateParameters.seed`, so setting that field alone would
+not provide controlled sampling. The persistent worker still processes requests
+serially and exits on EOF.
+
+A real failure also appeared during profiling: the Chinese short phrase hit
+exactly 75 generated tokens without EOS. Upstream silently reduced the caller's
+1200-token budget to `min(maxTokens, max(75, textTokenCount * 6))`. The worker
+correctly reported truncation. The tracked
+`respect-requested-token-limit.patch` removes this text-length heuristic and
+honors the explicit caller budget. The build helper checks the immutable source
+revision and applies this patch idempotently. The 1200-token ceiling, EOS guard
+and parent process deadlines remain; removing the heuristic does not guarantee
+that every possible input will terminate correctly or retain speech quality.
+
+An optional C++ diagnostic patch timed MLX Metal source-library compilation and
+slow pipeline creation. To exercise a cold source-cache path without deleting
+shared system caches, it added a process-unique comment to runtime-generated
+Metal source. Kernel operations, weights, prompt and seed were unchanged. This
+was a deliberate cache-miss experiment, **not normal production timing**.
+
+| Fixed-seed English experiment | Metal compilation logged after request | First PCM seconds | Complete PCM seconds | Audio seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Existing source cache | 0.017 s | 0.172 | 1.024 | 2.80 |
+| Unique-comment cold source | 5.701 s | 5.850 | 6.735 | 2.80 |
+
+Both saved WAV files were byte-identical (SHA256
+`350dc732b9e1f42931a8b2d7e6e93f167f50ac4f6cb2ff5345614730af4cff21`).
+The cold run spent about 3.73 seconds before its first generated token; additional
+decoder kernels compiled before the first audio chunk. Thus cold Metal
+compilation demonstrably causes a stall of the same scale as the earlier
+observations, without changing the output. The historical slow runs had no such
+trace, so this is strong support for that explanation rather than proof that
+every earlier or future stall has the same cause. Shared OS caches were left
+intact. Disabling MLX graph compilation was also tried: first PCM was 0.496 s and
+completion 1.357 s in that check, with new unfused-kernel compilation; it did not
+improve the measured first request and was not adopted.
+
+The diagnostic C++ changes were then reversed, the original MLX checkout was
+verified clean, and the normal worker was rebuilt with only the token-budget
+patch. Two fresh worker processes, each seeded 42 per request, completed:
+
+| Normal build | Load seconds | English first / complete seconds | Chinese first / complete seconds |
+| --- | ---: | ---: | ---: |
+| Process A | 0.656 | 0.165 / 0.954 | 0.137 / 1.180 |
+| Process B | 0.285 | 0.194 / 1.199 | 0.174 / 1.389 |
+
+Both used actual Metal, produced byte-identical corresponding WAVs across
+processes, and exited on EOF. Qwen3-ASR read the English and Chinese samples back
+correctly. Post-request worker RSS was about 1.83 GB. Model weights were private
+copies; no download, global cache purge or long-model stress run occurred.
+
+This supports continuing with a native persistent Swift worker. Cold compilation
+cost remains possible after a cache miss or version/device change; ordinary
+fixed-seed fresh-process requests in the final checks were fast. No model warmup
+was added to application startup. Production packaging, runtime selection and
+removal of the Python setup flow remain separate implementation work.
