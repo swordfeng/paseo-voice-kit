@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::audio::Pcm;
 
 mod qwen;
-use qwen::{request as qwen_request, speak_chunk as qwen_speak_chunk, text_chunks, worker_error as qwen_worker_error, Health as QwenHealth, Sampling as QwenSampling};
+use qwen::{request as qwen_request, request_deadline as qwen_request_deadline, speak_chunk as qwen_speak_chunk, text_chunks, worker_error as qwen_worker_error, Health as QwenHealth, Sampling as QwenSampling};
 
 /// The engine itself can't serve requests right now (its server is unreachable, rejects
 /// the configured credentials, or is overloaded), as opposed to a problem with one request.

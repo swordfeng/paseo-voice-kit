@@ -70,19 +70,19 @@ covers the rule yet; the list is at the end of the [Release checklist](#release-
 ## 2. Server supervision
 
 - SUP-1 The server binds to 127.0.0.1. If the configured port is busy, it uses a free port
-  and the status says so. Paseo's settings follow the actual port. `+T`
+  and the status says so. Paseo's settings follow the actual port. `T:supervisor`
 - SUP-2 Each start creates a new token, passed in the environment and never on the command
   line. `T:speech-switch` (key refresh)
 - SUP-3 After a crash, the server restarts with a backoff of 1 s doubling to 30 s. After
   5 crashes within 5 minutes, it stops trying and shows "failed" until the user restarts
   it, or a settings change restarts it. It does not try again on its own later.
-  (Decided, Q3.) `+T`
+  (Decided, Q3.) `T:supervisor`
 - SUP-4 Two health check misses in a row mark the server degraded, and every feature falls
-  back. Probing continues. `+T`
+  back. Probing continues. `T:supervisor`
 - SUP-5 A settings change that needs a restart lets in-flight requests finish for at most
   15 s, then kills the old server. The wait ends as soon as nothing is in flight; model
   loading isn't involved. Plugin shutdown waits at most 1.5 s, then kills the server.
-  (Decided, Q8.) `+T`
+  (Decided, Q8.) `T:supervisor`
 - SUP-6 On start, the plugin stops servers left behind by an earlier plugin process that
   serve its models folder, matching that folder exactly. Processes are listed with `ps` on
   macOS and Linux and with `Get-CimInstance` on Windows. `T:supervisor` (listing) `M`
@@ -116,7 +116,7 @@ speaking.
 - SITE-6 Voice Kit saves its intent before patching Paseo. A crash at any step can be
   recovered on the next pass without losing the user's previous value. `T:speech-switch`
 - SITE-7 A setting locked by an environment variable on the daemon shows as locked, and
-  Voice Kit never writes to it. `+T`
+  Voice Kit never writes to it. `T:speech-switch`
 - SITE-8 Turning Voice Kit off, or stopping the plugin, restores every managed setting.
   `T:speech-switch` `M`
 - SITE-9 Removing the plugin restores every managed setting through the plugin's cleanup,
@@ -148,9 +148,9 @@ speaking.
 - STT-3 While the default is pending, listening stays with Paseo's built-in speech and no
   listening model is downloaded, so the probe can't make a download wasted. Other startup
   errors (download approval) still start the server with a temporary model, so they are
-  reported; that model is never stored. `+T`
+  reported; that model is never stored. `T:default-stt`
 - STT-4 Dictation and voice-mode listening may use different models. The server loads
-  only the listening models of the features that are on. `+T`
+  only the listening models of the features that are on. `T:empty-voices`
 - STT-5 Every local recognizer gets Silero VAD preprocessing. Audio without speech returns
   empty text. Leading and trailing silence is trimmed, keeping 300 ms at each edge.
   Remote servers get the original audio. `N:speech_filter` `N:runtime`
@@ -167,11 +167,11 @@ speaking.
   Paseo's recording pipeline, not Voice Kit, and is a known limitation to report upstream.
   `GAP-E1`
 - STT-6 Whisper uses Whisper base to detect the language when base is installed, and the
-  large model's own detection when confidence is below 0.7. `+T`
+  large model's own detection when confidence is below 0.7. `M`
 - STT-7 A fixed Language setting overrides detection. Vocabulary goes to Whisper as a
-  prompt and to Qwen3-ASR as hotwords. `+T`
+  prompt and to Qwen3-ASR as hotwords. `M`
 - STT-8 Undecodable audio is a client error: 400 `invalid_audio`. Silent audio returns empty
-  text only when the listening model is installed. `+T`
+  text only when the listening model is installed. `T:http-api`
 - STT-9 Transcripts never contain model control text, such as Qwen3-ASR's language header.
   The header is removed by its format, not by deleting the word "language" wherever it
   appears. `N:engine::sherpa`
@@ -206,7 +206,7 @@ speaking.
   `N:engine::chain` `N:engine::route` `N:engine::mlx`
 - TTS-6a Text the API accepts doesn't fail by design. A Qwen request gets 60 s per chunk plus
   30 s, and each chunk is bounded by its frame cap (WRK-5a), so long text doesn't time out
-  for being long. `+T`
+  for being long. `N:engine::qwen`
 - TTS-7 Voice Kit detects the language of what it reads. Paseo's OpenAI voice provider
   sends only `model`, `voice`, `input` and `response_format` (checked in Paseo's app
   bundle, 2026-11-15), and the preview sends no language either, so no request language
@@ -214,7 +214,7 @@ speaking.
   correct. (Decided, Q4.)
 - TTS-7a Short text must not be refused because its language was misdetected. Replies such
   as "OK.", "Sí." or a bare name or number have to be read, not refused with
-  `unsupported_language`. `+T`
+  `unsupported_language`. `N:engine::chain`
 - TTS-8 Each enabled voice model reads with the voice chosen for it (VOI-1), whatever voice the
   request names. There are no personas spanning models, and no voice matching between
   models. A voice the model doesn't have falls back to the model's default voice.
@@ -223,7 +223,7 @@ speaking.
   after generation and keeps the pitch. `N:audio`
 - TTS-10 Input is limited to 20 000 characters and output to 10 minutes. There is no overall
   voice-list cutoff: each engine bounds its own work, so a long request completes or fails
-  clearly, never dropping the speech already made. `+T`
+  clearly, never dropping the speech already made. `M`
 - TTS-11 Paseo receives PCM. The preview receives WAV.
 
 ## 6. Models
@@ -238,7 +238,7 @@ speaking.
   `N:runtime` `N:engine::route`
 - MOD-3 A model serves one request at a time, and all voice requests share one queue. A
   request waits at most 3 minutes behind another and 10 minutes for a model that is loading
-  (a first Core ML compile can take minutes), then fails as busy. `+T` `GAP-S12` (work for
+  (a first Core ML compile can take minutes), then fails as busy. `N:runtime` `GAP-S12` (work for
   a client that disconnected still runs to the end)
 
 ### Downloads
@@ -247,20 +247,20 @@ speaking.
   downloaded in the background, one at a time. With it off, models download only when the
   user asks. `N:runtime`
 - DL-2 Every built-in file is checked against a pinned SHA-256, and a file that fails the
-  check is deleted. Files from Hugging Face use the Hub's SHA-256 when one exists. `N:download` (verification of a complete file) `+T`
+  check is deleted. Files from Hugging Face use the Hub's SHA-256 when one exists. `N:download`
 - DL-3 Downloads resume after an interruption. For a model made of several files, finished
   files are kept while the entry's downloads stay the same, and partial files are named by
   their position in the entry (`<id>~<n>~<name>.part`), so files with the same name in
   different folders never share one. `N:download`
 - DL-4 A download fails if connecting takes over 15 s or the connection sends nothing for
-  60 s, and it can then be retried. `+T`
+  60 s, and it can then be retried. `N:download`
 - DL-5 A failed download shows its error, and pulling the model retries it. A download that
   finishes but leaves the model incomplete is a failure like any other. A failed automatic
   download is retried after 5 minutes, not on every request. `N:download`
-- DL-6 Removing a model that is downloading is refused (409 `download_in_progress`). `+T`
+- DL-6 Removing a model that is downloading is refused (409 `download_in_progress`). `T:http-api`
 - DL-7 A model's partial files are deleted when it installs or is removed. At startup, before
   any download, partial files untouched for 7 days and files in the old naming are deleted.
-  `N:download` (after install) `+T` (startup)
+  `N:download`
 - DL-8 Pulling a model that is already installed or downloading starts nothing new. Pulling
   the voice list skips models that can't run on this computer. `T:http-recovery`
 
@@ -270,7 +270,7 @@ speaking.
   cannot be removed.
 - DEL-2 Voice Kit never deletes or writes files it reads from elsewhere: Paseo's reuse
   folder and the user's own model folders. Models there get no Core ML encoder, since it
-  would be unpacked next to them. `+T`
+  would be unpacked next to them. `N:catalog`
 
 ### Models shared with Paseo
 
@@ -312,7 +312,7 @@ speaking.
     same reason.
   - Later, outside 0.1.1: phonemization through a separate helper process, so these
     families can work (see [Later work](#later-work)).
-  Refused at Hugging Face lookup and at load, with the reason. `M` `+T`
+  Refused at Hugging Face lookup and at load, with the reason. `M` `T:hf-lookup`
 - CUS-1b Picking the files of a sherpa-onnx folder or archive ignores files under 1 KB, such
   as Git LFS pointers. A MeloTTS package contains a 133-byte `model.int8.onnx` pointer that
   detection used to pick over the real model. Moonshine (v1 and v2 layouts) is detected
@@ -320,7 +320,7 @@ speaking.
 - CUS-5 A remote server receives the audio and text for its model, with the user's API
   key. For listening and speaking alike, transport errors and 401/403/404/408/429/502/503/504
   mark the model unavailable (a runtime failure, TTS-6); other errors fail only that
-  request. `N:runtime` (listening) `+T`
+  request. `N:runtime` `N:engine::remote`
 
 ### Acceleration
 
@@ -331,7 +331,7 @@ speaking.
   the UI must not suggest otherwise. `M`
 - ACC-2 Status shows the backend that actually runs, never the one requested. The bundled
   sherpa-onnx builds run on the CPU everywhere, so every sherpa-onnx model reports `cpu`,
-  also when Core ML, CUDA or DirectML was requested. `+T`
+  also when Core ML, CUDA or DirectML was requested. `M`
 
 ## 7. Worker processes (GGUF and MLX)
 
@@ -407,7 +407,7 @@ speaking.
 - SET-3 The overall status shows ready, degraded or loading based on the features that are
   on. A feature that is off cannot degrade it. `T:feature-phase`
 - SET-4 Each feature shows why it is falling back, as a language-neutral code the UI
-  translates. `+T`
+  translates. `T:empty-voices`
 - SET-5 The UI follows Paseo's app language. Anything missing appears in English. `M`
 - SET-6 Memory figures belong to the current server process only, and include its model
   worker processes. They are measured on macOS, Linux and Windows. On Windows they use the
@@ -424,12 +424,12 @@ speaking.
 
 ## 9. Server HTTP interface and security
 
-- API-1 Every request whose `Host` is not a loopback host is rejected with 421. `+T`
+- API-1 Every request whose `Host` is not a loopback host is rejected with 421. `T:http-api`
 - API-2 Every endpoint except `/health` requires the bearer token, compared in constant
-  time. `+T`
+  time. `T:http-api`
 - API-3 Errors use OpenAI's error format, including rejections of malformed requests and
   unknown routes, which also get the loopback check. A speech request without
-  `response_format` gets a 400 that names pcm and wav. `+T`
+  `response_format` gets a 400 that names pcm and wav. `T:http-api`
 - API-4 Paseo's `config.json`, `state.json` and the custom model catalog are written
   owner-only (`0600`), atomically.
 - API-5 Keys can be written but not read back, as in Paseo, whose speech settings show
@@ -540,7 +540,8 @@ Not in 0.1.1:
 Per AGENTS.md, keep each run short: start with a small sample, put a time limit on each
 step, and confirm GPU use wherever acceleration is expected.
 
-1. Automated: `node scripts/run-behavior-tests.mjs`, the Python checks in `scripts/`,
+1. Automated: `node scripts/run-behavior-tests.mjs`, `scripts/test-http-api.py`,
+   `scripts/test-http-recovery.py` and the other Python checks in `scripts/`,
    `cargo test` in `server/`, and the CI native package checks on all five platforms.
 2. Clean install (Apple Silicon, empty `plugin-data/voice-kit`): the approval card, then
    declining (Voice Kit off, built-in speech kept), then approving (download, checksum,
@@ -579,6 +580,4 @@ step, and confirm GPU use wherever acceleration is expected.
 
 ### Rules without an automated test
 
-These rules carry `+T`: they are checked by hand on this list, or not yet at all. 26 as of 2026-11-15:
-
-SUP-1, SUP-3, SUP-4, SUP-5, SITE-7, STT-3, STT-4, STT-6, STT-7, STT-8, TTS-6a, TTS-7a, TTS-10, MOD-3, DL-2, DL-4, DL-6, DL-7, DEL-2, CUS-1a, CUS-5, ACC-2, SET-4, API-1, API-2, API-3.
+Every rule has an automated test or a manual check on this list (`M`) as of 2026-11-15.

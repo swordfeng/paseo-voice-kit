@@ -27,7 +27,7 @@ import {
 import { z } from "zod";
 import { PREVIEW_LINES } from "./shared/languages";
 import { DEFAULT_CPU_STT_MODEL, PASEO_VOICE, preferences, type Preferences } from "./shared/settings";
-import { DefaultSttModel, DefaultSttSelectionPending, chooseDefaultSttModel, needsDefaultStt, withDefaultSttModels } from "./server/default-stt";
+import { DefaultSttModel, DefaultSttSelectionPending, chooseDefaultSttModel, interimListeningModel, needsDefaultStt, settledDefault, withDefaultSttModels } from "./server/default-stt";
 import { SpeechSwitch, type Desired } from "./server/speech-switch";
 import { loadState, type PluginState } from "./server/state";
 import { effectiveTts, TTS_CHAIN_ID } from "./server/tts-chain";
@@ -193,12 +193,11 @@ export default function contribute(server: PluginServerContext) {
           const model = await chooseDefaultSttModel(values,
             () => supervisor.prepareBinary(values.binaryPath, "Checking this machine's GPU", { code: "checkingGpu" }, values.approvedServerArchive, signal),
             line => supervisor.note(line), signal).catch((error) => {
-              // Three inconclusive GPU checks in a row: settle on the CPU model rather than wait forever.
-              if (error instanceof DefaultSttSelectionPending && defaultFailures >= 2) {
-                supervisor.note("[voice-kit] GPU check inconclusive three times; using the CPU listening model as this computer's default");
-                return DEFAULT_CPU_STT_MODEL;
-              }
-              throw error;
+              // Inconclusive GPU checks keep failing: settle on the CPU model rather than wait forever.
+              const settled = settledDefault(error, defaultFailures);
+              if (!settled) throw error;
+              supervisor.note("[voice-kit] GPU check inconclusive three times; using the CPU listening model as this computer's default");
+              return settled;
             });
           if (revision !== prefsRevision || stopped) throw new Error("Speech preferences changed during initialization");
           return model;
@@ -218,7 +217,7 @@ export default function contribute(server: PluginServerContext) {
         // While the GPU check is merely pending, listening stays with Paseo's built-in speech, so no
         // model is downloaded that the check may then replace. Other errors (installation consent)
         // still start the server with a temporary model so they are reported; it is never saved.
-        nextPrefs = withDefaultSttModels(values, error instanceof DefaultSttSelectionPending ? "" : DEFAULT_CPU_STT_MODEL);
+        nextPrefs = withDefaultSttModels(values, interimListeningModel(error));
       }
     }
     if (revision !== prefsRevision || stopped) return;

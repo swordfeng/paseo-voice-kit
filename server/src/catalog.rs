@@ -676,4 +676,19 @@ mod tests {
         assert!(store.locate(entry).unwrap().shared);
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    #[test]
+    fn borrowed_models_get_no_core_ml_encoder() {
+        let tmp = std::env::temp_dir().join(format!("vk-coreml-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({"id": "whisper-fixture", "kind": "stt", "label": "x", "engine": "whisper", "files": {"model": "ggml-x.bin"}})).unwrap();
+        let store = Store { models_dir: tmp.join("own"), reuse_dirs: vec![tmp.join("reuse")], shared_models_dir: None, paseo_managed: false };
+        std::fs::create_dir_all(tmp.join("reuse").join(entry.dir_name())).unwrap();
+        std::fs::write(tmp.join("reuse").join(entry.dir_name()).join("ggml-x.bin"), "x").unwrap();
+        assert!(store.coreml_dir(&entry).is_none(), "nothing is unpacked into a borrowed folder");
+        std::fs::create_dir_all(store.own_dir(&entry)).unwrap();
+        std::fs::write(store.own_dir(&entry).join("ggml-x.bin"), "x").unwrap();
+        assert!(store.coreml_dir(&entry).unwrap().starts_with(tmp.join("own")));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

@@ -119,6 +119,8 @@ export class Supervisor {
   private lifetime = new AbortController();
   private readonly logs: string[] = [];
   private runToken: string | null = null;
+  /** How long a restart lets in-flight requests finish (SUP-5); shorter in tests. */
+  private drainMs = 15_000;
 
   constructor(private readonly onChange: (snapshot: SupervisorSnapshot) => void) {}
 
@@ -462,7 +464,7 @@ export class Supervisor {
     // the server exits as soon as nothing is in flight), then the old server is stopped.
     // Cleanup still stays short because Paseo can end a plugin subprocess immediately.
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<"timeout">((resolve) => { timer=setTimeout(() => resolve("timeout"), drain ? 15_000 : 1500); });
+    const timeout = new Promise<"timeout">((resolve) => { timer=setTimeout(() => resolve("timeout"), drain ? this.drainMs : 1500); });
     const result=await Promise.race([exited, timeout]);
     if(timer)clearTimeout(timer);
     if (result === "timeout") {

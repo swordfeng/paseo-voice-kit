@@ -331,9 +331,7 @@ impl TtsEngine for GgufTts {
             }
             let generation = worker.as_mut().context("Qwen worker stopped before text budgeting")?;
             let chunks = text_chunks(req.text, |text| generation.token_count(text, planning_deadline))?;
-            // Each chunk is bounded by its frame cap (and the GGUF worker's own 60 s), so the whole
-            // request gets that per chunk: accepted text never times out just for being long.
-            let deadline = started + Duration::from_secs(30 + chunks.len() as u64 * 60);
+            let deadline = started + super::qwen_request_deadline(chunks.len());
             let mut samples = Vec::new();
             for text in chunks {
                 if !text.chars().any(char::is_alphanumeric) {

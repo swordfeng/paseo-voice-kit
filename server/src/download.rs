@@ -36,9 +36,17 @@ const STALE_PARTIAL: Duration = Duration::from_secs(7 * 24 * 3600);
 /// one model's partial files are never mistaken for another's.
 const SEP: char = '~';
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Downloads {
     inner: Arc<Mutex<HashMap<String, Progress>>>,
+    /// See STALL; shorter in tests.
+    stall: Duration,
+}
+
+impl Default for Downloads {
+    fn default() -> Self {
+        Self { inner: Arc::default(), stall: STALL }
+    }
 }
 
 /// Progress key for an entry's CoreML encoder.
@@ -229,7 +237,8 @@ impl Downloads {
             .user_agent(concat!("voicekit/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT)
             .build()?;
-        let stalled = || anyhow::anyhow!("download stalled: no data for {} s", STALL.as_secs());
+        let stall = self.stall;
+        let stalled = || anyhow::anyhow!("download stalled: no data for {} s", stall.as_secs_f32());
         let mut offset = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
         // Stream the prefix rather than allocating a potentially gigabyte-sized buffer.
         let mut hasher = Sha256::new();
@@ -250,10 +259,10 @@ impl Downloads {
         if offset > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
-        let mut resp = tokio::time::timeout(STALL, req.send()).await.map_err(|_| stalled())??;
+        let mut resp = tokio::time::timeout(stall, req.send()).await.map_err(|_| stalled())??;
         if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && offset > 0 {
             // Stale/oversized partial file: retry from zero once, without a Range header.
-            resp = tokio::time::timeout(STALL, client.get(url).send()).await.map_err(|_| stalled())??;
+            resp = tokio::time::timeout(stall, client.get(url).send()).await.map_err(|_| stalled())??;
             offset = 0;
             hasher = Sha256::new();
         }
@@ -279,7 +288,7 @@ impl Downloads {
         let mut stream = resp.bytes_stream();
         let mut done = offset;
         let mut last = 0u64;
-        while let Some(chunk) = tokio::time::timeout(STALL, stream.next()).await.map_err(|_| stalled())? {
+        while let Some(chunk) = tokio::time::timeout(stall, stream.next()).await.map_err(|_| stalled())? {
             let chunk = chunk?;
             hasher.update(&chunk);
             file.write_all(&chunk).await?;
@@ -507,6 +516,73 @@ mod tests {
         assert!(downloads.error("incomplete-fixture").unwrap().contains("incomplete"));
         assert!(!downloads.may_start("incomplete-fixture"), "not started again on the next request");
         tokio::fs::remove_dir_all(root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_stops_sending_fails_instead_of_hanging() {
+        let part = std::env::temp_dir().join(format!("vk-stall-{}.part", std::process::id()));
+        tokio::fs::remove_file(&part).await.ok();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nti").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let downloads = Downloads { stall: Duration::from_millis(200), ..Downloads::default() };
+        let started = Instant::now();
+        let error = downloads.fetch("test", &format!("http://{address}/model"), &part, None).await.unwrap_err();
+        assert!(error.to_string().contains("stalled"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        server.abort();
+        tokio::fs::remove_file(&part).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_file_that_fails_its_checksum_is_deleted() {
+        let root = std::env::temp_dir().join(format!("vk-sha-{}", std::process::id()));
+        tokio::fs::remove_dir_all(&root).await.ok();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nevil").await.unwrap();
+        });
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "sha-fixture", "kind": "stt", "label": "fixture", "engine": "whisper", "files": {"model": "m.bin"},
+            "download": [{"url": format!("http://{address}/m.bin"), "file": "m.bin", "size": 4, "sha256": hex::encode(Sha256::digest(b"tiny"))}],
+        })).unwrap();
+        let store = Store { models_dir: root.clone(), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false };
+        let error = Downloads::default().ensure(&store, &entry).await.unwrap_err();
+        server.await.unwrap();
+        assert!(format!("{error:#}").contains("checksum mismatch"));
+        let leftovers: Vec<_> = std::fs::read_dir(root.join(".partial")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".part")).collect();
+        assert!(leftovers.is_empty(), "the bad file is not kept to be resumed");
+        assert!(store.locate(&entry).is_none());
+        tokio::fs::remove_dir_all(root).await.ok();
+    }
+
+    #[test]
+    fn startup_cleanup_removes_abandoned_and_old_style_partials_only() {
+        let root = std::env::temp_dir().join(format!("vk-gc-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let partial = root.join(".partial");
+        std::fs::create_dir_all(partial.join(format!("old{SEP}dir"))).unwrap();
+        for name in [format!("fresh{SEP}0{SEP}a.bin.part"), "legacy-a.bin.part".to_string(), format!("old{SEP}0{SEP}a.bin.part")] {
+            std::fs::write(partial.join(name), b"x").unwrap();
+        }
+        let month_ago = SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+        std::fs::File::options().write(true).open(partial.join(format!("old{SEP}0{SEP}a.bin.part"))).unwrap().set_modified(month_ago).unwrap();
+        std::fs::File::open(partial.join(format!("old{SEP}dir"))).unwrap().set_modified(month_ago).unwrap();
+        gc_partials(&root);
+        let mut left: Vec<_> = std::fs::read_dir(&partial).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, [format!("fresh{SEP}0{SEP}a.bin.part")]);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

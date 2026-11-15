@@ -63,6 +63,13 @@ fn token_limited(error: &anyhow::Error) -> bool {
     error.downcast_ref::<RequestFailure>().is_some_and(|f| f.code.as_deref() == Some("token_limit"))
 }
 
+/// The whole request's deadline: each chunk is bounded by its frame cap (and the GGUF worker's
+/// own 60 s), so the request gets that per chunk plus 30 s. Accepted text never times out just
+/// for being long.
+pub(super) fn request_deadline(chunks: usize) -> std::time::Duration {
+    std::time::Duration::from_secs(30 + chunks as u64 * 60)
+}
+
 /// Generate one chunk, capped by its text length. A generation that never reaches its end token
 /// repeats exactly with the same seed, but another seed almost always finishes (eval.md), so it is
 /// retried once with another seed at the same temperature.
@@ -247,6 +254,13 @@ mod tests {
         let request = request("hi", "vivian", Some("en"), first_sampling(1)).unwrap();
         assert_eq!(request["max_new_tokens"], 60);
         assert!(request["temperature"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn the_request_deadline_grows_with_the_text() {
+        assert_eq!(request_deadline(1).as_secs(), 90);
+        // No fixed ceiling: 20 chunks get 20 minutes and a half, more than their frame caps need.
+        assert_eq!(request_deadline(20).as_secs(), 30 + 20 * 60);
     }
 
     #[test]

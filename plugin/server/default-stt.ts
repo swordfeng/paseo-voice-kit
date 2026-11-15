@@ -57,6 +57,26 @@ export function needsDefaultStt(values: Preferences): boolean {
 
 export class DefaultSttSelectionPending extends Error {}
 
+/** Inconclusive GPU checks in a row after which the CPU model becomes the default. */
+export const INCONCLUSIVE_CHECKS = 3;
+
+/**
+ * The default to store after a failed selection, if any: the CPU model once the GPU check was
+ * inconclusive `INCONCLUSIVE_CHECKS` times in a row (`earlierFailures` counts the ones before).
+ */
+export function settledDefault(error: unknown, earlierFailures: number): string | null {
+  return error instanceof DefaultSttSelectionPending && earlierFailures >= INCONCLUSIVE_CHECKS - 1 ? DEFAULT_CPU_STT_MODEL : null;
+}
+
+/**
+ * Listening while there is no default yet. A pending GPU check leaves it with Paseo's built-in
+ * speech (""), so nothing is downloaded that the check may replace. Other errors (download
+ * approval) start the server with the CPU model so they are reported; it is never stored.
+ */
+export function interimListeningModel(error: unknown): string {
+  return error instanceof DefaultSttSelectionPending ? "" : DEFAULT_CPU_STT_MODEL;
+}
+
 /** Failed/missing measurements are unknown, not evidence that this computer is CPU-only. */
 export function modelFromProbe(report: { fastWhisper?: boolean; gpu?: unknown; accelerator?: string; medianMs?: number; reason?: string }): string {
   if (report.gpu === null && report.fastWhisper === false) return DEFAULT_CPU_STT_MODEL;

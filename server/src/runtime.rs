@@ -917,6 +917,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_busy_model_is_waited_for_only_so_long() {
+        let busy = Mutex::new(());
+        let _held = busy.lock().unwrap();
+        let started = Instant::now();
+        let error = lock_within(&busy, Duration::from_millis(80), "this model").unwrap_err();
+        assert!(error.to_string().contains("still busy"));
+        assert!(started.elapsed() >= Duration::from_millis(80) && started.elapsed() < Duration::from_secs(2));
+        let free = Mutex::new(());
+        assert!(lock_within(&free, Duration::from_millis(80), "this model").is_ok());
+    }
+
+    #[test]
     fn voices_seen_at_load_are_remembered_per_model() {
         let root = std::env::temp_dir().join(format!("vk-voice-cache-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();

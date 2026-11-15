@@ -231,5 +231,18 @@ check("19 a later real edit remains an override", dict().model === "user-model" 
     check("22 unreadable state is an error and stays as it was", error?.code === "EACCES" && JSON.parse(readFileSync(statePath, "utf8")).previous.voiceOutput.apiKey === "sk-real", error?.code);
   }
 }
+// SITE-7: a setting an environment variable sets on the daemon is shown as locked and never written.
+{
+  const lockedTts = { provider: "local", model: "kokoro" };
+  write({ providers: { local: { modelsDir: "/fixture" } }, envOverrides: { "features.voiceMode.tts.provider": "PASEO_VOICE_TTS_PROVIDER" }, features: { dictation: { stt: { provider: "local", model: "sense-voice" } }, voiceMode: { stt: { provider: "local", model: "sense-voice" }, tts: lockedTts } } });
+  const locked = new SpeechSwitch({ previous: {}, managed: {}, overrides: {}, edited: {} });
+  locked.attach(paseo);
+  locked.setDesired(desired("vk_locked")); await locked.reconcile();
+  const status = locked.siteStatuses.find((s: any) => s.site === "voiceOutput");
+  check("23 an environment-locked setting is left alone", JSON.stringify(tts()) === JSON.stringify(lockedTts), tts());
+  check("23 and shown as locked by that variable", status?.state === "locked" && status?.reason?.variable === "PASEO_VOICE_TTS_PROVIDER", status);
+  check("23 the other settings are still taken over", dict().baseUrl === K, dict());
+  await locked.releaseAll();
+}
 console.log(failures ? failures + " FAILED" : "all passed");
 process.exitCode = failures ? 1 : 0;

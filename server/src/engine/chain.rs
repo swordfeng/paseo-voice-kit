@@ -240,6 +240,15 @@ mod tests {
         chain.synthesize(SpeakRequest { text, voice: "default", speed: 1.0, language: Some(language) }, &mut Timings::default())
     }
     #[test]
+    fn short_replies_are_read_not_refused() {
+        // Too short to detect reliably: these must be read by an enabled voice, not refused.
+        let (chain, calls) = approximating(&[("en-voice", &["en"], false), ("es-voice", &["es"], false)]);
+        for text in ["OK.", "Sí.", "42.", "Paseo.", "Mm-hmm."] {
+            chain.synthesize(SpeakRequest { text, voice: "default", speed: 1.0, language: None }, &mut Timings::default()).unwrap_or_else(|e| panic!("{text}: {e:#}"));
+        }
+        assert_eq!(calls.lock().unwrap().len(), 5);
+    }
+    #[test]
     fn native_voice_wins_over_an_allowed_approximation_regardless_of_list_order() {
         // Spanish is listed first and may read Catalan approximately; the Catalan voice is native.
         let (mut chain, calls) = approximating(&[("es-voice", &["es"], false), ("ca-voice", &["ca"], false)]);
@@ -266,6 +275,13 @@ mod tests {
     }
 }
 impl std::error::Error for RoutingError {}
+
+/// Text too short to detect ("OK.", "Sí.", a name) whose letters are all Latin is read as
+/// English rather than refused; undetected text in other scripts is still refused, so it is never
+/// read with the wrong pronunciation.
+fn latin_letters_only(text: &str) -> bool {
+    text.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_ascii() || ('\u{00C0}'..='\u{024F}').contains(&c))
+}
 
 pub struct ChainTts {
     pub models: Vec<Arc<Route>>,
@@ -386,7 +402,7 @@ impl TtsEngine for ChainTts {
         // for plain ASCII text.
         let language = req.language.map(str::to_string)
             .or_else(|| lang::runs(req.text).into_iter().find_map(|r| r.lang.map(str::to_string)))
-            .or_else(|| req.text.is_ascii().then(|| "en".to_string()));
+            .or_else(|| latin_letters_only(req.text).then(|| "en".to_string()));
         let pcm = engine.synthesize(SpeakRequest { text: req.text, voice: &voice, language: language.as_deref().and_then(|l| self.language(route, l)), speed: req.speed }, timings)?;
         route.succeeded();
         *self.last_runs.lock().unwrap() = vec![json!({"model": route.model, "voice": voice, "language": language})];
@@ -403,17 +419,7 @@ impl TtsEngine for ChainTts {
             .map(|r| {
                 r.lang
                     .or(req.language)
-                    .unwrap_or_else(|| {
-                        if r.text
-                            .chars()
-                            .filter(|c| c.is_alphabetic())
-                            .all(|c| c.is_ascii())
-                        {
-                            "en"
-                        } else {
-                            "und"
-                        }
-                    })
+                    .unwrap_or_else(|| if latin_letters_only(&r.text) { "en" } else { "und" })
                     .to_string()
             })
             .collect();

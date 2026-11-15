@@ -29,6 +29,11 @@ const sdk = {
     child.pid = spawnMode === 'error' ? undefined : 1000000000 + spawns.length; child.exitCode = null;
     const exit = () => { if (child.exitCode !== null) return; child.exitCode = 0; active--; child.emit('exit', 0, null); child.emit('close', 0, null); };
     child.stdin = { end: () => setImmediate(exit) }; child.kill = () => { setImmediate(exit); return true; };
+    if (spawnMode === 'stubborn') {
+      // Ignores stdin EOF and SIGTERM, like a server stuck in a long request; only SIGKILL ends it.
+      child.stdin = { end: () => {} };
+      child.kill = (signal) => { if (signal === 'SIGKILL') setImmediate(exit); return true; };
+    }
     if (child.pid) active++;
     maximum = Math.max(maximum, active); spawns.push(args); latestChild = child;
     if (spawnMode === 'error') queueMicrotask(() => {
@@ -38,7 +43,7 @@ const sdk = {
     if (spawnMode === 'early-exit') queueMicrotask(exit);
     return child;
   },
-  terminateProcess: async (child) => child.kill(),
+  terminateProcess: async (child, signal) => child.kill(signal ?? 'SIGKILL'),
 };
 function archive(name, bytes) {
   const header = Buffer.alloc(512);
@@ -201,6 +206,58 @@ Module._load = function (name, ...args) {
   assert.equal(active, 0); assert.equal(postSpawnError.state.phase, 'restarting');
   assert.equal(postSpawnError.crashes.length, 1); await postSpawnError.dispose();
   console.log('PASS spawn error/close/exit once, bounded retries, immediate exit and no live predecessor');
+
+  // SUP-3: restarts back off (1 s, then 2 s) before giving up.
+  spawnMode = 'early-exit';
+  const backoff = new Supervisor(() => {});
+  await backoff.apply(config); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(backoff.state.notice.code, 'crashRestarting'); assert.equal(backoff.state.notice.seconds, 1);
+  clearTimeout(backoff.restartTimer); backoff.restartTimer = null;
+  await backoff.start(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(backoff.state.notice.seconds, 2, 'the second crash waits longer');
+  await backoff.dispose();
+  spawnMode = 'normal';
+  console.log('PASS crash restarts back off');
+
+  // SUP-1: a busy port falls back to a free one and says so.
+  const net = require('node:net');
+  const blocker = net.createServer(); await new Promise(resolve => blocker.listen(0, '127.0.0.1', resolve));
+  const busyPort = blocker.address().port;
+  const busy = new Supervisor(() => {});
+  await busy.apply({ ...config, port: busyPort });
+  const args = spawns.at(-1);
+  assert.equal(args[args.indexOf('--port') + 1], '0', 'the server picks a free port');
+  assert.equal(busy.state.notice?.code, 'portBusy'); assert.equal(busy.state.notice?.port, busyPort);
+  await busy.dispose(); await new Promise(resolve => blocker.close(resolve));
+  console.log('PASS a busy port falls back to a free one with a notice');
+
+  // SUP-4: one missed health check is not an outage; two in a row are.
+  const healthy = new Supervisor(() => {});
+  const realFetch = global.fetch;
+  try {
+    await healthy.apply(config);
+    healthy.snapshot.port = 49102;
+    global.fetch = async () => { throw new Error('connection refused'); };
+    await healthy.checkHealth();
+    assert.notEqual(healthy.state.phase, 'degraded', 'one miss is tolerated');
+    await healthy.checkHealth();
+    assert.equal(healthy.state.phase, 'degraded'); assert.equal(healthy.state.notice?.code, 'healthCheckFailed');
+  } finally { global.fetch = realFetch; await healthy.dispose(); }
+  console.log('PASS two missed health checks mark the server degraded');
+
+  // SUP-5: a restart waits only so long for a server that doesn't exit, then ends it.
+  spawnMode = 'stubborn';
+  const draining = new Supervisor(() => {});
+  draining.drainMs = 80;
+  await draining.apply(config);
+  const stuck = latestChild, began = Date.now();
+  spawnMode = 'normal';
+  await draining.apply({ ...config, voice: 'NEXT' });
+  assert(stuck.exitCode !== null, 'the old server was ended');
+  assert(Date.now() - began >= 80 && Date.now() - began < 3000, 'after the drain limit, not before');
+  assert.equal(spawns.at(-1)[spawns.at(-1).indexOf('--voice') + 1], 'NEXT');
+  await draining.dispose();
+  console.log('PASS a restart ends a server that outlives the drain limit');
 
   const checked = new Supervisor(() => {});
   const savedFetch = global.fetch;
