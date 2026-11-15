@@ -455,3 +455,79 @@ The existing four-core-model integration smoke also passed in 10.77 seconds:
 Whisper base and Qwen TTS used actual Metal, Qwen ASR and Supertonic used CPU.
 Qwen ASR's 40/100-second silence regressions, TTS repeated seed and speed checks
 passed. This was a local Mac check, not a new Windows or Linux hardware run.
+
+## Native Swift MLX worker experiment (2026-11-14)
+
+`server/mlx-worker` is a standalone feasibility experiment, not the production
+MLX engine. It reuses the framed stdin/stdout protocol with a persistent Swift
+process. Rust worker selection, installation, dependency notices and the Python
+setup flow have not been migrated. No running plugin or user settings changed.
+
+The build pins `Neywa-Labs/mlx-audio-swift` to
+`209e1cb45498c5b7b4b96d417f9b15fe71d440f5`, MLX Swift to 0.33.0, and transitive
+dependencies in `Package.resolved`. It built in release mode with Xcode 27.2 /
+Swift 6.4.2 and the Metal Toolchain on the local Apple M6 Mac. The native worker
+does not launch Python. MLX's generated Metal resource bundle must accompany it.
+
+All weights were already installed. Tests used private APFS clones because the
+upstream Swift loader may write tokenizer files or clear a malformed cache
+directory. The user's model folders were not passed to that loader. The worker
+validates the speech-tokenizer directory before loading. A malformed-directory
+fixture returned a framed error and preserved its sentinel/tokenizer files.
+The worker requires MLX's GPU
+default device, reports Apple M6 / `metal`, and completed real GPU inference;
+creating a Metal device alone was not treated as a successful test.
+
+`server/mlx-worker/smoke.py` runs one owned worker at a time, with a 60-second
+startup budget, 60 seconds per utterance and 10 seconds to exit on stdin EOF.
+Failure terminates that worker's process group. It saves framed-protocol results,
+WAVs and stderr. Swift and the existing private Python worker (`mlx-audio` 0.6.5)
+used the same 0.6B 4-bit CustomVoice weights, Serena, explicit English/Chinese,
+0.4-second chunk intervals and a 1200-token ceiling. Sampling settings were
+temperature 0.9, top-k 50, top-p 1 and repetition penalty 1.05. No seed or
+bit-identical parity was assumed. Swift additionally requires the configured EOS
+token: the upstream text-length-dependent generation cap must not silently
+produce a successful truncated clip.
+
+The phrases were “Hello, this is a speech test.” and “你好，这是一个语音测试。”.
+Both workers' saved WAVs were transcribed correctly by an isolated native
+Qwen3-ASR server with the shared VAD filter. Swift also passed one English sample
+with 0.6B 8-bit and 1.7B 4-bit weights. Every tested worker exited successfully on
+EOF; repeated Swift launches completed without retaining the old worker process.
+
+These are single short observations, not a statistically controlled benchmark.
+The 0.6B 4-bit comparison after the first Swift execution was:
+
+| Worker | Language | Audio seconds | First PCM chunk seconds | Complete PCM seconds |
+| --- | --- | ---: | ---: | ---: |
+| Python | English | 3.12 | 0.299 | 1.263 |
+| Python | Chinese | 2.72 | 0.165 | 0.995 |
+| Swift | English | 2.88 | 0.215 | 1.487 |
+| Swift | Chinese | 3.28 | 0.203 | 1.323 |
+
+Python startup was 2.081 seconds; the restarted Swift worker took 0.259 seconds.
+After these requests, Python RSS was about 1.95 GB and Swift RSS about 1.83 GB.
+RSS is not total unified-memory use: Swift separately reported about 2.41 GB peak
+MLX active allocation, and these counters must not be added together. First-chunk
+time is worker output timing, not application playback latency. Output lengths
+differ because sampling and implementation differ.
+
+The **first-ever Swift execution** was substantially slower: 2.018 seconds to
+load, 8.457 seconds to first PCM and 10.414 seconds to complete a 5.76-second
+English clip. A later fresh-process check using the retained smoke harness also
+took 6.352 seconds to first PCM and 7.533 seconds to finish a 2.88-second clip,
+despite loading in 0.548 seconds. Its Python counterpart took 0.184 seconds to
+first PCM and 1.004 seconds to finish a different, 2.64-second sample. Swift's
+startup/request latency therefore remains inconsistent. Cache state was not
+controlled and the source of these stalls was not traced; the faster observation
+must not be advertised as representative cold-start latency.
+The additional 0.6B 8-bit and 1.7B 4-bit English clips took 1.755 and 1.049
+seconds to finish, respectively, with different generated durations. These
+samples do not establish a performance ranking between model sizes.
+
+The experiment establishes that a separate native Swift worker can reuse these
+weights and remove Python from this inference path. It does not establish
+voice-quality parity, long-text reliability, every speaker/language, minimum-OS
+compatibility or production packaging. The community Qwen implementation remains
+a dependency to pin and validate; this result is not a claim of library maturity.
+The repeated long first-request stalls need investigation before migration.
