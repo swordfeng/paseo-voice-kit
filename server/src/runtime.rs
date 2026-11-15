@@ -1,4 +1,4 @@
-//! Engine lifecycle: lazy load, warm-up, idle unload, background reload, status and latency stats.
+//! Engine lifecycle: lazy load, idle unload, background reload, status and latency stats.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -485,11 +485,14 @@ impl Runtime {
                 continue;
             }
             let result = if entry.kind == Kind::Stt {
-                if let Some(slot) = self.stt.get(&entry.id) { slot.reset_failed(); }
+                let Some(slot) = self.stt.get(&entry.id) else { continue };
+                if !matches!(*slot.state.lock().unwrap(), SlotState::Failed { .. }) { continue; }
+                slot.reset_failed();
                 self.stt(&entry.id).map(|_| ())
             } else {
                 let engine = match &*self.tts.state.lock().unwrap() { SlotState::Ready(engine) => Some(engine.clone()), _ => None };
                 if let Some(engine) = engine { engine.model_downloaded(downloaded); }
+                if !matches!(*self.tts.state.lock().unwrap(), SlotState::Failed { .. }) { continue; }
                 self.tts.reset_failed();
                 self.tts().map(|_| ())
             };
@@ -539,9 +542,11 @@ impl Runtime {
         Ok(engine)
     }
 
-    /// Blocking: load a new engine for `model` while the current one keeps serving, then swap.
+    /// Reload an active model after an optional encoder download; never wake an unused model.
     pub fn reload_stt(&self, model: &str) {
         let Some(slot) = self.stt.get(model) else { return };
+        let _guard = slot.run.lock().unwrap();
+        if !matches!(*slot.state.lock().unwrap(), SlotState::Ready(_)) { return; }
         match self.load_stt(model) {
             Ok(engine) => {
                 self.set_accel(model, engine.accelerator());
@@ -597,26 +602,6 @@ impl Runtime {
     /// A TTS stage measured after the engine lock is released (output audio encoding).
     pub fn record_tts_stage(&self, stage: &'static str, ms: f64) {
         self.tts.record_stages(&crate::engine::Timings(vec![(stage, ms)]));
-    }
-
-    /// Blocking: load every configured engine so first requests are fast. Engines load in
-    /// parallel, so a slow one (a first-time Neural Engine compile takes minutes) does not hold
-    /// back the others: the plugin can route dictation to a ready model meanwhile.
-    pub fn warm_up(&self) {
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                if let Err(err) = self.tts() {
-                    tracing::warn!(error = %format!("{err:#}"), "TTS warm-up failed");
-                }
-            });
-            for model in &self.settings.stt_models {
-                scope.spawn(move || {
-                    if let Err(err) = self.stt(model) {
-                        tracing::warn!(model, error = %format!("{err:#}"), "STT warm-up failed");
-                    }
-                });
-            }
-        });
     }
 
     fn configured_entries(&self) -> Vec<&ModelEntry> {
@@ -698,6 +683,8 @@ impl Runtime {
                 Some(reason) if !downloading => ("failed", Some(reason)),
                 _ => (if downloading { "downloading" } else { "missing" }, error),
             }
+        } else if let Some(reason) = self.unrunnable(entry).or_else(|| entry.option_str("unavailable").map(str::to_string)) {
+            ("failed", Some(reason))
         } else {
             slot.state_label()
         };
@@ -709,7 +696,8 @@ impl Runtime {
         EngineStatus {
             model: entry.id.clone(),
             state,
-            available: matches!(state, "ready" | "idle"),
+            // Installed models accept their first request without a startup load.
+            available: matches!(state, "ready" | "idle" | "unloaded"),
             accelerator: accel,
             error,
             p50_ms: slot.p50(),
@@ -1096,10 +1084,15 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("vk-remote-flaky-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("catalog.json");
-        std::fs::write(&file, json!({ "models": [{ "id": "custom-remote-asr", "kind": "stt", "label": "Remote", "engine": "openai",
-            "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } }] }).to_string()).unwrap();
+        std::fs::write(&file, json!({ "models": [
+            { "id": "custom-remote-asr", "kind": "stt", "label": "Remote", "engine": "openai",
+              "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } },
+            { "id": "custom-remote-voice", "kind": "tts", "label": "Remote", "engine": "openai",
+              "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } }
+        ] }).to_string()).unwrap();
         let mut settings = crate::default_settings();
         settings.stt_models = vec!["custom-remote-asr".into()];
+        settings.tts_model = "custom-remote-voice".into();
         let rt = Runtime::new(Catalog::load(&[file]).unwrap(), Store { models_dir: folder.join("models"), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false }, settings, host.handle().clone());
         let audio = crate::audio::Pcm { samples: vec![0.1; 1600], sample_rate: 16_000 };
         let transcribe = || rt.with_stt("custom-remote-asr", &mut crate::engine::Timings::default(), |engine, t| {
@@ -1107,6 +1100,23 @@ mod tests {
         });
         let status = || rt.status()["stt"][0].clone();
 
+        // Health checks, download completion, optional encoder completion and recovery ticks
+        // must leave installed engines routable without allocating their models.
+        let assert_unloaded = || {
+            let health = rt.status();
+            assert_eq!(health["status"], "ready");
+            for engine in [&health["stt"][0], &health["tts"]] {
+                assert_eq!(engine["state"], "unloaded");
+                assert_eq!(engine["available"], true);
+                assert_eq!(engine["accelerator"], serde_json::Value::Null);
+            }
+        };
+        assert_unloaded();
+        rt.recover_downloaded("custom-remote-asr");
+        rt.recover_downloaded("custom-remote-voice");
+        rt.reload_stt("custom-remote-asr");
+        rt.retry_failed();
+        assert_unloaded();
         assert_eq!(transcribe().unwrap(), "remote works");
         assert_eq!(status()["available"], true);
 

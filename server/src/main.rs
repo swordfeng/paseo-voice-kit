@@ -265,8 +265,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Machine-readable handshake for the supervisor. Always the first stdout line.
     println!("{}", serde_json::json!({ "event": "listening", "port": port, "version": env!("CARGO_PKG_VERSION") }));
 
-    // Prepare models in the background: download if asked, then warm both engines so the
-    // first real request does not pay the load cost.
+    // Download configured models in the background, but leave engines unloaded until a request.
     {
         let runtime = runtime.clone();
         let auto_pull = args.auto_pull;
@@ -278,14 +277,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     }
                 }
             }
-            let rt = runtime.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                rt.warm_up();
-                println!("{}", serde_json::json!({ "event": "warm", "status": rt.status()["status"] }));
-            })
-            .await;
-            // Neural Engine encoders last: they are large and optional. Whisper keeps serving
-            // on Metal while one downloads and compiles, then switches over.
+            // Optional encoders may download now; only an already loaded model is reloaded.
             if !runtime.settings.stub && auto_pull {
                 for entry in runtime.missing_coreml() {
                     match runtime.downloads.ensure_coreml(&runtime.store, &entry).await {

@@ -251,3 +251,24 @@ test-only change), and an Intel Mac model download timed out before inference. B
 passed in focused runs. The tagged 0.1.1 release must pass its own gates. The checks are
 short content and timing checks in English and Chinese, not quality scores for every
 language, and the times are from shared CI runners.
+## First-use model loading (2026-11-14)
+
+Local Apple M6 check with the release build (`coreml` feature, Neural Engine disabled,
+automatic acceleration): installed models remain unloaded at startup and are available
+to receive their first request. Status queries, download completion, recovery ticks and
+optional encoder completion leave unused models unloaded. Existing idle unloading remains.
+The native suite passed 46 tests (2 local fixture tests ignored).
+
+An isolated server with Whisper turbo Q5 and Supertonic 3 stayed unloaded through status
+queries and a two-second idle check. Server RSS was 42.6 MB. One short English synthesis
+followed by transcription returned the expected sentence; Whisper used Metal. First
+recognition took 0.83 s including 147 ms loading. This is one smoke sample, not a latency
+benchmark.
+
+After deploying the same binary and reloading the live plugin, total reported RSS was
+342 MB (plugin process plus speech server and owned workers), with STT and TTS unloaded
+and all three speech sites active. Plugin preview plus the configured dictation endpoint
+completed an English round trip; first recognition took 1.32 s including 201 ms loading,
+using Metal. Preferences were unchanged. The plugin was reloaded again after verification
+to leave the installation unloaded; its final reported total was 305 MB, with all three
+speech sites active. These observations do not revalidate other platforms.
