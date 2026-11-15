@@ -7,7 +7,7 @@ import { MODEL_LICENSES } from "../shared/model-licenses";
 import type { Model, RouteVoices, Status } from "../shared/rpc";
 import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, effectiveApproximateLanguages, type CustomModel, type Preferences } from "../shared/settings";
 import { LanguagePicker } from "./custom-model-form";
-import { MlxRuntimeSetup } from "./mlx-runtime";
+import { MlxRuntimeStatus } from "./mlx-runtime";
 import type { WriteResult } from "./settings-writer";
 import { formatBytes, percent } from "./format";
 import { DEVICE_NAMES, appleSilicon, joinList, languageName, languageOptionLabel, modelDescription, modelLabel, useText, usedByLabel, type Translate } from "./i18n";
@@ -242,7 +242,7 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
         <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{m.paseoInUse ? t("models.paseoInUse") : t("models.removesForPaseo")}</Text>
       ) : null}
 
-      {m.engine === "mlx" && m.tier === "custom" ? <MlxRuntimeSetup theme={theme} /> : null}
+      {m.engine === "mlx" && m.tier === "custom" ? <MlxRuntimeStatus theme={theme} /> : null}
       {editing && props.custom ? <CustomEditor {...props} model={m} custom={props.custom} onDone={() => setEditing(false)} /> : null}
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: compact ? "flex-start" : "flex-end" }}>

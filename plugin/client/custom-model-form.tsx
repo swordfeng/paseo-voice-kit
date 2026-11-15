@@ -8,7 +8,7 @@ import { LANGUAGES } from "../shared/languages";
 import { hfLookupRpc, type HfLookup } from "../shared/rpc";
 import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, SHERPA_FAMILIES, type CustomModel } from "../shared/settings";
 import { customModelFromDraft } from "./custom-model";
-import { MlxRuntimeSetup } from "./mlx-runtime";
+import { MlxRuntimeStatus } from "./mlx-runtime";
 import { formatBytes } from "./format";
 import { errorText, languageName, languageOptionLabel, useText, type Translate } from "./i18n";
 
@@ -355,7 +355,7 @@ export function CustomModelForm({
           {found?.suggestion.source === "mlx" || MLX_FAMILY_VALUES.has(draft.family ?? "") ? (
             <View style={{ gap: 6, paddingHorizontal: 4 }}>
               <Text style={styles.note}>{t("form.mlxNote")}</Text>
-              <MlxRuntimeSetup theme={theme} showReady />
+              <MlxRuntimeStatus theme={theme} showReady />
             </View>
           ) : null}
           {tried && problem ? <Text style={styles.error}>{problem}</Text> : null}
