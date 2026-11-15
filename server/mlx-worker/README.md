@@ -45,6 +45,8 @@ Private IPC also accepts `{op:"count_tokens", text:...}` and returns a
 `text_tokens` frame with `count` and no PCM. It reuses the model's loaded text
 tokenizer, without running inference or loading a second tokenizer. Generation
 requests still require the shared temperature and seed fields.
+An optional `instruction` field supplies the CustomVoice style separately from
+the spoken text. No instruction is used when the field is absent or empty.
 `diagnostics/metal-compile-timers.patch` is an optional probe for the MLX C++
 submodule; the normal build does not apply it. It can intentionally create cold
 source-cache entries and is not part of the distributed runtime.

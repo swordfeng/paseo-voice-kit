@@ -167,7 +167,7 @@ impl Worker {
         writeln!(
             input,
             "{}",
-            super::qwen_request(req.text, req.voice, Some(language(req.language)))
+            super::qwen_request(req.text, req.voice, Some(language(req.language)))?
         )?;
         input.flush()?;
         let mut samples = Vec::new();

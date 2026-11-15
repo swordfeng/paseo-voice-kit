@@ -778,3 +778,19 @@ Temperature 0.2 and seed 42 are unchanged. Deployment replaces both workers and
 the server together, retains rollback, and reloads only Voice Kit.
 Live verification found all three speech sites active, saved preferences unchanged,
 and a successful MLX Metal preview through the reloaded plugin.
+
+### Optional 0.6B instruction trial (2026-11-15)
+
+Both workers now accept an optional, separate style instruction via the shared
+`VOICEKIT_QWEN_INSTRUCTION` server environment variable. The normal default stays
+unset. A four-sample A/B trial used Serena, temperature 0.2, seed 42 and the same
+Chinese weather/walking sentence. The instruction requested calm, natural, steady
+delivery without laughter or added vocalizations. All four samples ran on Metal
+and transcribed back to the input sentence without reading instruction text.
+MLX baseline/instruction durations were 5.20/4.48 seconds; GGUF 11.52/4.88 seconds.
+Waveform hashes changed with conditioning in both backends. This demonstrates an
+effect on generation, not proven semantic instruction-following or calmer delivery;
+audition is needed. The short English alternative was supplied as text, not tested.
+49 native tests passed, 3 local fixtures ignored. Both workers and the server were
+deployed with rollback retained, no default instruction enabled, and preferences
+preserved while reloading only Voice Kit.

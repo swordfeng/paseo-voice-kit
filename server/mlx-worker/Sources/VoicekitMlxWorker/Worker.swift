@@ -13,6 +13,7 @@ struct Request: Decodable {
     let temperature: Float?
     let seed: UInt64?
     let op: String?
+    let instruction: String?
 }
 
 struct Frames: Sendable {
@@ -95,6 +96,10 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                               request.text.utf8.count <= 8_000 else { throw Failure("invalid text length") }
                         let voice = request.voice?.lowercased() ?? "serena"
                         guard voices.contains(voice) else { throw Failure("unsupported speaker") }
+                        let instruction = request.instruction?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        guard instruction.utf8.count <= 2048 else { throw Failure("voice instruction too large") }
+                        // MLXAudio CustomVoice accepts its speaker and style in one prompt.
+                        let voicePrompt = instruction.isEmpty ? voice : voice + ", " + instruction
                         let language = request.language.flatMap { languages[$0] } ?? "Auto"
                         let started = Date()
                         profile("request", ["characters": request.text.count])
@@ -106,7 +111,7 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                               temperature.isFinite, (0...2).contains(temperature), seed <= UInt64(Int64.max) else { throw Failure("invalid sampling parameters") }
                         let parameters = GenerateParameters(maxTokens: 1200, temperature: temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
                         MLXRandom.seed(seed)
-                        for try await event in model.generateStream(text: request.text, voice: voice,
+                        for try await event in model.generateStream(text: request.text, voice: voicePrompt,
                                 refAudio: nil, refText: nil, language: language,
                                 generationParameters: parameters, streamingInterval: 0.4) {
                             if case .token(let token) = event {

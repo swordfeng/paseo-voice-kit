@@ -5,9 +5,13 @@ const TEXT_TOKENS: usize = 64;
 // Bound private JSON probes (even control characters expand by at most 6x).
 const PROBE_BYTES: usize = 8_000;
 
-pub(super) fn request(text: &str, voice: &str, language: Option<&str>) -> serde_json::Value {
-    serde_json::json!({"text":text,"voice":voice,"language":language,
-        "temperature":0.2,"seed":42})
+pub(super) fn request(text: &str, voice: &str, language: Option<&str>) -> Result<serde_json::Value> {
+    let instruction = std::env::var("VOICEKIT_QWEN_INSTRUCTION").ok();
+    if let Some(value) = &instruction {
+        ensure!(value.len() <= 2048 && !value.contains('\0'), "Qwen instruction exceeds private IPC limit");
+    }
+    Ok(serde_json::json!({"text":text,"voice":voice,"language":language,
+        "temperature":0.2,"seed":42,"instruction":instruction}))
 }
 
 /// Preserve source slices exactly; prefer whole sentences, then clauses/words.

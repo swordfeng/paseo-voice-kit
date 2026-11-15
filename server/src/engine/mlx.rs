@@ -98,7 +98,7 @@ impl Worker {
 
     fn speak(&mut self, req: SpeakRequest<'_>, timings: &mut Timings, deadline: Instant) -> anyhow::Result<Pcm> {
         let input = self.input.as_mut().context("MLX input closed")?;
-        writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language))?;
+        writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language)?)?;
         input.flush()?;
         let mut samples = Vec::new();
         loop {

@@ -123,6 +123,12 @@ through private IPC, from one shared policy in `engine/qwen.rs`. Both main and
 acoustic talkers use that temperature. Process reuse, bounded requests,
 worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
 and existing model selections are unchanged by the backend migration.
+The optional `VOICEKIT_QWEN_INSTRUCTION` server environment variable passes the
+same style instruction to both workers (at most 2048 UTF-8 bytes); unset means no
+instruction. GGUF uses `params.instruct`, while MLXAudio CustomVoice uses its
+`speaker, instruction` prompt format. The instruction is separate from spoken text.
+Use with 0.6B is experimental: the official Python wrapper disables its instruction
+field even though the model card advertises it.
 Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech
 server built from the current source changes the tempo of its generated audio afterwards,
 keeping the pitch (native processing built into the server, with nothing extra to install); a

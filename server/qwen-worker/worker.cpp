@@ -141,8 +141,11 @@ int main(int argc, char **argv) {
             else frame("{\"event\":\"text_tokens\",\"bytes\":0,\"count\":" + std::to_string(count) + "}");
             yyjson_doc_free(doc); continue;
         }
+        const std::string instruction = string_value(root, "instruction", "");
+        if (instruction.size() > 2048) { error("voice instruction too large"); yyjson_doc_free(doc); continue; }
         qt_tts_params params; qt_tts_default_params(&params);
         params.text = text.c_str(); params.speaker = voice.c_str(); params.lang = language.c_str();
+        params.instruct = instruction.empty() ? nullptr : instruction.c_str();
         // Both workers receive the same sampling policy from the speech server.
         auto temperature = yyjson_obj_get(root, "temperature");
         auto seed = yyjson_obj_get(root, "seed");
