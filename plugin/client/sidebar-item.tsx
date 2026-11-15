@@ -48,7 +48,14 @@ function Row({ theme, currentScreen, openScreen }: PluginSidebarItemProps) {
           // Clips the hidden measuring layer only; visible text always fits.
           style={{ flexDirection: "row", alignItems: "center", gap: 6, marginRight: 8, overflow: "hidden" }}
         >
-          <FitText candidates={summary.candidates} style={{ color: c.foregroundMuted, fontSize: 11 }} />
+          <View style={{ alignItems: "flex-end" }}>
+            <FitText candidates={summary.candidates} style={{ color: c.foregroundMuted, fontSize: 11 }} />
+            {summary.memory ? (
+              <Text testID="voicekit-sidebar-memory" style={{ color: c.foregroundMuted, fontSize: 10, lineHeight: LINE_HEIGHT, maxWidth: MAX_WIDTH, textAlign: "right" }}>
+                {summary.memory}
+              </Text>
+            ) : null}
+          </View>
           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
         </Pressable>
       }

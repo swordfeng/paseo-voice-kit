@@ -337,6 +337,7 @@ export const zhCN: Messages = {
     a11yDevices: "已加载的模型在 {{devices}} 上运行。",
     a11yNoneLoaded: "当前没有加载模型。",
     a11yMemory: "内存：常驻 {{size}}，为 Voice Kit 插件服务、语音服务和工作进程的合计。",
+    a11yGpuMemory: "独立显存：{{size}}。内存数值按独立显存 + 常驻内存的顺序显示。",
   },
   advanced: {
     app: "应用",

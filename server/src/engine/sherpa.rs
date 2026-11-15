@@ -13,6 +13,8 @@ use sherpa_onnx::{
 };
 
 use super::{SpeakRequest, SttEngine, Timings, TranscribeRequest, TtsEngine, Voice};
+use std::{path::Path, sync::Mutex};
+
 use crate::{
     audio::Pcm,
     catalog::{Installed, ModelEntry},
@@ -33,6 +35,7 @@ pub struct SherpaStt {
     tidy_caps: bool,
     /// Qwen3-ASR can return its `language <Name><asr_text>` header with the transcript.
     qwen3_asr: bool,
+    speech_filter: Option<Mutex<crate::speech_filter::SpeechFilter>>,
 }
 
 impl SherpaStt {
@@ -91,14 +94,29 @@ impl SherpaStt {
             accelerator: provider_name(provider),
             tidy_caps: matches!(family, "sense_voice" | "paraformer"),
             qwen3_asr: family == "qwen3_asr",
+            speech_filter: None,
         })
+    }
+
+    pub fn with_speech_filter(mut self, path: &Path) -> anyhow::Result<Self> {
+        self.speech_filter = Some(Mutex::new(crate::speech_filter::SpeechFilter::load(path)?));
+        Ok(self)
     }
 }
 
 impl SttEngine for SherpaStt {
-    fn transcribe(&self, req: TranscribeRequest<'_>, _timings: &mut Timings) -> anyhow::Result<String> {
+    fn transcribe(&self, req: TranscribeRequest<'_>, timings: &mut Timings) -> anyhow::Result<String> {
+        let filtered = if let Some(filter) = &self.speech_filter {
+            let filtered = timings.time("speech_filter", || filter.lock().unwrap_or_else(|p| p.into_inner()).speech(req.audio))?;
+            tracing::info!(input_secs = req.audio.duration_secs(), speech_secs = filtered.as_ref().map_or(0.0, |a| a.duration_secs()), "speech filtered");
+            match filtered {
+                Some(audio) => Some(audio),
+                None => return Ok(String::new()),
+            }
+        } else { None };
+        let audio = filtered.as_ref().unwrap_or(req.audio);
         let stream = self.recognizer.create_stream();
-        stream.accept_waveform(req.audio.sample_rate as i32, &req.audio.samples);
+        stream.accept_waveform(audio.sample_rate as i32, &audio.samples);
         self.recognizer.decode(&stream);
         let result = stream.get_result().ok_or_else(|| anyhow::anyhow!("no recognition result"))?;
         let text = result.text.trim();
@@ -351,7 +369,7 @@ mod tests {
     #[test]
     fn qwen3_asr_header_is_removed_but_transcripts_are_kept() {
         // Plain transcripts and ordinary words pass through untouched.
-        for plain in ["Hello, this is a speech test.", "你好，这是一个语音测试。", "language matters here", "Utterance one, utterance two."] {
+        for plain in ["Hello, this is a speech test.", "你好，这是一个语音测试。", "language", "language matters here", "Utterance one, utterance two."] {
             assert_eq!(qwen3_asr_transcript(plain), plain);
         }
         // The official header, in any language, and a stray single-word label.

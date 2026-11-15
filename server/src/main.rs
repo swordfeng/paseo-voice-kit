@@ -272,8 +272,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         tokio::spawn(async move {
             if !runtime.settings.stub && auto_pull {
                 for entry in runtime.missing_models() {
-                    if let Err(err) = runtime.downloads.ensure(&runtime.store, &entry).await {
-                        tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed");
+                    match runtime.downloads.ensure(&runtime.store, &entry).await {
+                        Ok(()) => {
+                            // An early request may have cached a missing-model/dependency failure.
+                            // Recover failed engines now; unused engines remain unloaded.
+                            let rt = runtime.clone();
+                            let _ = tokio::task::spawn_blocking(move || rt.recover_downloaded(&entry.id)).await;
+                        }
+                        Err(err) => tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed"),
                     }
                 }
             }

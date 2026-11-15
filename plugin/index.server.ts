@@ -271,10 +271,14 @@ export default function contribute(server: PluginServerContext) {
     const snap = sharedSnapshot(supervisor.state);
     const health = snap.health;
     const pid = supervisor.childPid;
-    const memoryBytes = await memory.sample(pid);
+    const usage = await memory.sampleUsage(pid);
+    const currentMemory = supervisor.childPid === pid;
     return {
       phase: snap.phase,
-      memoryBytes: supervisor.childPid === pid ? memoryBytes : null,
+      memoryBytes: currentMemory ? usage.memoryBytes : null,
+      gpuMemoryBytes: currentMemory ? usage.gpuMemoryBytes : null,
+      gpuSharedMemoryBytes: currentMemory ? usage.gpuSharedMemoryBytes : null,
+      gpuMemorySource: currentMemory ? usage.gpuMemorySource : null,
       message: speech?.error ?? snap.message,
       notice: speech?.error ? null : snap.notice,
       connected: speech?.connected ?? false,

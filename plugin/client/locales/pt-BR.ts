@@ -318,6 +318,7 @@ export const ptBR: Messages = {
     externalRuntime: "VOICEKIT_MLX_PYTHON aponta para o seu próprio Python ({{python}}), então o Voice Kit não instala outro. Instale mlx e mlx-audio nele.",
   },
   sidebar: {
+    a11yGpuMemory: "Memória dedicada da GPU: {{size}}. Os valores mostram memória dedicada da GPU + memória residente.",
     off: "Desativado",
     needsPermission: "Requer permissão",
     connecting: "Conectando…",

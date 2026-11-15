@@ -1,11 +1,17 @@
-//! Reject non-speech and crop idle microphone audio before Whisper language detection.
+//! Reject non-speech and crop idle microphone audio before speech recognition.
 //! Keep the entire first-to-last speech span, including pauses and 300 ms at either edge.
 
 use std::{ops::Range, path::Path, sync::OnceLock};
 
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 
-use crate::{audio::Pcm, catalog::ModelEntry};
+use crate::{audio::Pcm, catalog::{Engine, ModelEntry}};
+
+/// These recognizers need speech bounds rather than an accumulated idle microphone buffer.
+pub fn required(entry: &ModelEntry) -> bool {
+    entry.engine == Engine::Whisper
+        || (entry.engine == Engine::Sherpa && entry.family.as_deref() == Some("qwen3_asr"))
+}
 
 /// Internal resource, not a selectable transcription model. The store can reuse Paseo's copy.
 pub fn model() -> &'static ModelEntry {
@@ -107,7 +113,7 @@ mod tests {
         let audio = crate::audio::decode_any(&std::fs::read(clip).unwrap(), Some("wav")).unwrap().resample(16_000);
         let mut filter = SpeechFilter::load(Path::new(&model)).unwrap();
         let clean = filter.speech(&audio).unwrap().expect("speech fixture");
-        let mut padded = vec![0.0; 20 * 16_000];
+        let mut padded = vec![0.0; 100 * 16_000];
         padded.extend_from_slice(&audio.samples);
         padded.resize(padded.len() + 10 * 16_000, 0.0);
         let padded = Pcm { samples: padded, sample_rate: 16_000 };

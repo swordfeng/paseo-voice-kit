@@ -355,12 +355,14 @@ impl Runtime {
         let entry = self.entry(model, Kind::Stt)?;
         let (entry, inst) = self.store.resolve(entry).ok_or_else(|| anyhow::anyhow!("model {} is not installed", entry.id))?;
         let entry = &entry;
+        let vad_path = if crate::speech_filter::required(entry) {
+            let vad = crate::speech_filter::model();
+            Some(self.store.locate(vad).and_then(|i| i.file(vad, "model"))
+                .ok_or_else(|| anyhow::anyhow!("speech activity detector is not installed; pull {} again", entry.id))?)
+        } else { None };
         Ok(match entry.engine {
             Engine::Whisper => {
                 let path = inst.file(entry, "model").ok_or_else(|| anyhow::anyhow!("{}: files.model missing", entry.id))?;
-                let vad = crate::speech_filter::model();
-                let vad_path = self.store.locate(vad).and_then(|i| i.file(vad, "model"))
-                    .ok_or_else(|| anyhow::anyhow!("speech activity detector is not installed; pull {} again", entry.id))?;
                 let detector = (entry.id != LANGUAGE_DETECTOR)
                     .then(|| self.catalog.find(LANGUAGE_DETECTOR))
                     .flatten()
@@ -376,9 +378,12 @@ impl Runtime {
                 }
                 let loaded = whisper::WhisperStt::load(&path, detector.as_deref(), self.use_gpu(), self.settings.threads, self.settings.beam_size, coreml);
                 self.compiling.lock().unwrap().remove(&entry.id);
-                Arc::new(loaded?.with_speech_filter(&vad_path)?)
+                Arc::new(loaded?.with_speech_filter(vad_path.as_deref().expect("Whisper VAD dependency"))?)
             }
-            Engine::Sherpa => Arc::new(sherpa::SherpaStt::load(entry, &inst, self.onnx_provider(), self.settings.threads, self.settings.stt_prompt.as_deref())?),
+            Engine::Sherpa => {
+                let loaded = sherpa::SherpaStt::load(entry, &inst, self.onnx_provider(), self.settings.threads, self.settings.stt_prompt.as_deref())?;
+                Arc::new(if let Some(path) = vad_path { loaded.with_speech_filter(&path)? } else { loaded })
+            }
             Engine::Openai => Arc::new(RemoteEngine::connect(entry.remote.as_ref().expect("validated"), self.handle.clone())?),
             Engine::Chain | Engine::Mlx | Engine::Gguf => anyhow::bail!("{} is a voice model", entry.id),
         })
@@ -450,7 +455,7 @@ impl Runtime {
 
     /// A chain is usable when at least one enabled model is installed and can run here.
     pub fn installed(&self, entry: &ModelEntry) -> bool {
-        if entry.engine == Engine::Whisper && self.store.locate(crate::speech_filter::model()).is_none() {
+        if crate::speech_filter::required(entry) && self.store.locate(crate::speech_filter::model()).is_none() {
             return false;
         }
         if entry.engine == Engine::Chain {
@@ -464,7 +469,7 @@ impl Runtime {
     /// Entries needed by this model, including its enabled chain children.
     pub fn with_dependencies<'a>(&'a self, entry: &'a ModelEntry) -> Vec<&'a ModelEntry> {
         let mut out = vec![entry];
-        if entry.engine == Engine::Whisper {
+        if crate::speech_filter::required(entry) {
             out.push(crate::speech_filter::model());
         }
         if entry.engine == Engine::Chain {
@@ -967,15 +972,22 @@ mod tests {
     }
 
     #[test]
-    fn whisper_fetches_speech_filter_and_reuses_shared_copy() {
+    fn speech_filtered_recognizers_fetch_and_reuse_shared_detector() {
         let handle = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("vk-vad-deps-{}", std::process::id()));
         let mut settings = crate::default_settings();
-        settings.stt_models = vec!["whisper-large-v3-turbo-q5_0".into()];
+        settings.stt_models = vec!["whisper-large-v3-turbo-q5_0".into(), "qwen3-asr-0.6b-int8".into()];
         let store = Store { models_dir: dir.join("own"), reuse_dirs: vec![dir.join("shared")], shared_models_dir: None, paseo_managed: false };
         let rt = Runtime::new(Catalog::load(&[]).unwrap(), store, settings, handle.handle().clone());
         let whisper = rt.catalog.find("whisper-large-v3-turbo-q5_0").unwrap();
         assert!(rt.with_dependencies(whisper).iter().any(|m| m.id == "silero-vad"));
+        let qwen = rt.catalog.find("qwen3-asr-0.6b-int8").unwrap();
+        assert!(rt.with_dependencies(qwen).iter().any(|m| m.id == "silero-vad"));
+        let mut custom = qwen.clone();
+        custom.id = "custom-qwen".into();
+        assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        custom.family = Some("transducer".into());
+        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
         assert!(rt.missing_models().iter().any(|m| m.id == "silero-vad"));
         // Reusing Paseo's detector must not copy, replace or download that model.
         let shared = dir.join("shared/silero-vad");
@@ -984,6 +996,39 @@ mod tests {
         assert!(!rt.missing_models().iter().any(|m| m.id == "silero-vad"));
         assert!(rt.store.locate(crate::speech_filter::model()).unwrap().shared);
         assert!(rt.catalog.find("silero-vad").is_none(), "VAD is not a selectable recognizer");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "set VOICEKIT_TEST_QWEN_ASR and VOICEKIT_TEST_VAD to installed local resources"]
+    fn qwen_recovers_after_its_missing_detector_is_installed() {
+        let host = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("vk-qwen-vad-recovery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entry = Catalog::load(&[]).unwrap().find("qwen3-asr-0.6b-int8").unwrap().clone();
+        entry.id = "custom-qwen-recovery".into();
+        entry.path = Some(std::env::var("VOICEKIT_TEST_QWEN_ASR").unwrap());
+        let catalog_path = dir.join("catalog.json");
+        std::fs::write(&catalog_path, json!({"models": [entry]}).to_string()).unwrap();
+        let mut settings = crate::default_settings();
+        settings.stt_models = vec!["custom-qwen-recovery".into()];
+        settings.threads = 2;
+        settings.accelerator = "cpu".into();
+        let rt = Runtime::new(Catalog::load(&[catalog_path]).unwrap(), Store {
+            models_dir: dir.join("models"), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false,
+        }, settings, host.handle().clone());
+        let entry = rt.catalog.find("custom-qwen-recovery").unwrap();
+        assert!(rt.store.locate(entry).is_some(), "ASR weights are already installed");
+        assert!(!rt.installed(entry), "missing VAD must make Qwen unavailable");
+        let error = rt.stt(&entry.id).err().expect("missing dependency");
+        assert!(error.to_string().contains("speech activity detector"));
+        let vad = dir.join("models/silero-vad");
+        std::fs::create_dir_all(&vad).unwrap();
+        std::fs::copy(std::env::var("VOICEKIT_TEST_VAD").unwrap(), vad.join("silero_vad.onnx")).unwrap();
+        assert!(rt.installed(entry));
+        rt.recover_downloaded("silero-vad");
+        assert!(rt.stt(&entry.id).is_ok(), "dependency completion clears the cached failure without restart");
+        drop(rt);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

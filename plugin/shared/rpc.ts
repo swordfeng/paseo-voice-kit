@@ -159,6 +159,11 @@ export const StatusSchema = z.object({
    * (not all of Paseo). Null where it can't be measured.
    */
   memoryBytes: z.number().nullable(),
+  /** Dedicated GPU bytes attributed to Voice Kit's processes; null when unavailable. */
+  gpuMemoryBytes: z.number().nullable().default(null),
+  /** GPU shared system memory, reported separately from dedicated GPU memory. */
+  gpuSharedMemoryBytes: z.number().nullable().default(null),
+  gpuMemorySource: z.literal("windows-process-counters").nullable().default(null),
 });
 export type Status = z.infer<typeof StatusSchema>;
 

@@ -319,6 +319,7 @@ export const ar: Messages = {
     externalRuntime: "يشير VOICEKIT_MLX_PYTHON إلى Python خاص بك ({{python}})، لذا لا يثبّت Voice Kit نسخة أخرى. ثبّت mlx وmlx-audio هناك.",
   },
   sidebar: {
+    a11yGpuMemory: "ذاكرة GPU المخصصة: {{size}}. تُعرض القيم بترتيب ذاكرة GPU المخصصة + الذاكرة المقيمة.",
     off: "متوقف",
     needsPermission: "يحتاج إلى إذن",
     connecting: "جارٍ الاتصال…",

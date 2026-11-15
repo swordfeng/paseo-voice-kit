@@ -318,6 +318,7 @@ export const ko: Messages = {
     externalRuntime: "VOICEKIT_MLX_PYTHON이 직접 지정한 Python({{python}})을 가리키므로 Voice Kit가 따로 설치하지 않습니다. 그곳에 mlx와 mlx-audio를 설치하세요.",
   },
   sidebar: {
+    a11yGpuMemory: "전용 GPU 메모리: {{size}}. 수치는 전용 GPU 메모리 + 상주 메모리 순서로 표시됩니다.",
     off: "꺼짐",
     needsPermission: "허락 필요",
     connecting: "연결 중…",

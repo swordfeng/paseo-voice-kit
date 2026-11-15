@@ -263,6 +263,99 @@ still needs listening evaluation.
 
 ## Real-model CPU checks for 0.1.1 (2026-11-14)
 
+### Windows process memory accounting
+
+Mac integration check after merging the Windows fixes with first-use loading:
+46 native tests passed (3 fixture tests ignored); the real VAD and missing-detector
+recovery fixtures were then run explicitly and passed. Type checking, behavior suites
+and plugin package verification passed. Four real-model checks completed in 11.03 s
+on Apple M6 with no downloads: Whisper base and Qwen TTS used Metal, Qwen ASR and
+Supertonic used CPU. Each server started with its configured engines unloaded but
+available; first requests succeeded. Qwen ASR preserved the Chinese fixture after
+40 and 100 seconds of leading silence. Qwen TTS speed 1/1.25 and repeated-seed
+checks passed. This is a short integration smoke, not a fresh Windows hardware run.
+
+Voice Kit's host status now samples Windows working sets and per-process GPU
+memory through read-only CIM queries, without requiring `nvidia-smi`, an
+administrator token, or a separate runtime installation. It sums the speech
+server's process tree plus the plugin process once, excluding the Paseo daemon,
+other agents/plugins and the PowerShell sampler. Creation times reject descendants
+whose parent PID has been reused. One hidden, bounded PowerShell process collects
+both snapshots; requests share a pending sample and a ten-second cache. A replaced
+server PID invalidates both RAM and GPU data.
+
+`memoryBytes` is the sum of resident working sets (RSS-style accounting, not
+unique/private bytes). `gpuMemoryBytes` and `gpuSharedMemoryBytes` respectively
+sum `DedicatedUsage` and `SharedUsage` from
+`Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory`, restricted
+to those same owned PIDs across adapters. `gpuMemorySource` identifies the
+Windows process counters. Shared GPU system RAM is never presented as dedicated
+VRAM or added to RSS. These are OS-reported process counters, not whole-device
+usage or guaranteed unique physical allocations; shared allocations can appear
+in more than one process, and provider refresh can lag model loading. Missing
+providers, failed queries or invalid measurements yield null, whereas a successful
+query with no owned GPU allocations yields zero. Other platforms keep their
+existing RAM collectors and report GPU process accounting unavailable.
+
+Native Windows 11 / RTX 5090 spot check: idle TTS process tree reported
+1,463,795,712 bytes RAM and 270,336 dedicated GPU bytes. A short Chinese Qwen
+Vulkan synthesis increased both, and its daemon dictation round trip returned
+the complete input. After the counters settled, the plugin returned
+2,547,732,480 RAM bytes, 2,218,504,192 dedicated GPU bytes and 17,379,328 shared
+GPU bytes. An independent Windows query matched both GPU totals exactly and
+reported 2,548,121,600 working-set bytes (sampling-time difference). Two
+authenticated clients read identical cached measurements. Type checking and the
+behavior suites passed, including process ownership, multiple adapters,
+unavailable/empty counters, overflow, coalescing and PID invalidation.
+
+The sidebar keeps devices and memory on separate lines so the figures are not
+dropped to fit its 120-pixel status slot. With active GPU execution, measured
+Windows dedicated memory and discrete-only device metadata, memory is shown as
+dedicated GPU bytes + resident bytes, in that order. iGPU/unified, hybrid or
+unknown device metadata, missing GPU counters and CPU-only execution retain one
+resident-memory figure; shared GPU memory is never added to it. These are separate
+accounting figures, not a newly calculated total. The classification follows the
+service host's devices, not the client OS. English/Chinese summary regressions
+cover this order and the single-value cases, plus exception-state precedence.
+
+### Qwen3-ASR idle microphone regression (native Windows)
+
+A 2.8-second Chinese fixture asking whether the fix can be pushed was correctly
+recognized without padding. With the same weights and input on CPU, 40 seconds
+of leading silence produced empty text (4.969 seconds wall time); 100 seconds
+produced the literal `language` (8.734 seconds). These are controlled recordings,
+not retained microphone audio from the original incident. Session logs showed
+104.32 and 47.872 seconds uploaded for speech intervals of about 4.33 and 3.33
+seconds; upload duration must not be confused with recognition wall time.
+
+Qwen3-ASR now uses the existing Silero speech filter before recognition, retaining
+the first-to-last speech span, all internal pauses and 300 ms boundaries. It does
+not change transcript parsing or suppress the ordinary word `language`. Other
+Sherpa families are unchanged. The shared dependency predicate covers loading,
+installed state and download dependencies, including custom Qwen entries. Startup
+downloads notify recovery so an early missing-VAD failure does not remain cached
+after the dependency arrives; unused engines remain unloaded. Offline installations need the small
+Silero model in the private model directory or a configured reuse directory.
+
+On the same native Windows machine, filtered 40/100-second leading-silence cases
+returned the complete Chinese sentence in 1.079/1.531 seconds. Trailing silence,
+a partial final VAD block, English, short Chinese/English, quiet speech (peak
+0.030 and 0.00897), a three-second internal pause, silence/noise followed by valid
+speech, and concurrent requests passed. Missing-detector recovery passed using
+installed ASR weights, without restarting the process. The 100-second padding
+cases are also covered by `scripts/smoke-real-models.py`.
+
+The final CPU core-model smoke took 18.31 seconds. The GPU regression took 17.59
+seconds with actual Vulkan Whisper and Qwen TTS 0.6B/1.7B, repeated-seed and speed
+checks; Qwen ASR and Supertonic remained on CPU. The running plugin's real daemon
+dictation interface recognized the padded Chinese fixture and English, and its
+preview RPC synthesized both languages. No microphone/playback listening test was
+performed. This mitigates the recognizer failure; it does not repair Paseo's
+recording-buffer lifecycle or remove earlier speech/assistant echo inside a buffer.
+Later real-session follow-ups still returned `language` and intermittently stalled
+recording/detection. Those issues remain unresolved. A separate cross-client settings
+display discrepancy recovered after plugin reload, with no settings-sync code fix.
+
 `scripts/smoke-real-models.py` runs short real inference against an unpacked native
 package, never installed into Paseo, with `--accelerator cpu`. It downloads only the pinned
 built-ins it uses. CPU is intentional for portable CI; on Macs, CPU workers now skip Metal

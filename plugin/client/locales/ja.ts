@@ -318,6 +318,7 @@ export const ja: Messages = {
     externalRuntime: "VOICEKIT_MLX_PYTHON が独自の Python（{{python}}）を指しているため、Voice Kit はインストールしません。そこに mlx と mlx-audio をインストールしてください。",
   },
   sidebar: {
+    a11yGpuMemory: "専用 GPU メモリ：{{size}}。数値は専用 GPU メモリ + 常駐メモリの順です。",
     off: "オフ",
     needsPermission: "許可が必要",
     connecting: "接続中…",

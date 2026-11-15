@@ -211,7 +211,25 @@ def run(config):
             raise RuntimeError("Qwen3-ASR round trip failed: " + repr((en, zh)))
         if "test" not in qwen_en.lower() or "speech" not in qwen_en.lower():
             raise RuntimeError("Qwen English synthesis round trip failed: " + qwen_en)
-        results.append({"model": ASR, "device": server.device(ASR), "english": en, "chinese": zh})
+        # Reproduce idle microphone accumulation without recording a microphone.
+        with wave.open(io.BytesIO(chinese), "rb") as clip:
+            rate = clip.getframerate()
+            pcm = clip.readframes(clip.getnframes())
+        idle_checks = []
+        for leading in (40, 100):
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as padded:
+                padded.setnchannels(1)
+                padded.setsampwidth(2)
+                padded.setframerate(rate)
+                padded.writeframes(bytes(leading * rate * 2) + pcm)
+            audio = buf.getvalue()
+            (config.output / f"chinese-idle-{leading}.wav").write_bytes(audio)
+            text = server.transcribe(audio, "zh")
+            if not any(word in text for word in ("你好", "语音", "测试")) or any(marker in text for marker in ("<asr_text>", "<|")):
+                raise RuntimeError(f"Qwen3-ASR lost speech after {leading}s idle audio: {text!r}")
+            idle_checks.append({"leadingSilenceSeconds": leading, "text": text})
+        results.append({"model": ASR, "device": server.device(ASR), "english": en, "chinese": zh, "idleAudio": idle_checks})
     checkpoint()
     # Expand only after the small/default models work. Limit this to runners with enough RAM.
     if config.large_qwen:

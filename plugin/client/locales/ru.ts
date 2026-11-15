@@ -319,6 +319,7 @@ export const ru: Messages = {
     externalRuntime: "VOICEKIT_MLX_PYTHON указывает на ваш собственный Python ({{python}}), поэтому Voice Kit не устанавливает свой. Установите туда mlx и mlx-audio.",
   },
   sidebar: {
+    a11yGpuMemory: "Выделенная память GPU: {{size}}. Значения показаны в порядке: выделенная память GPU + резидентная память.",
     off: "Выключено",
     needsPermission: "Нужно разрешение",
     connecting: "Подключение…",

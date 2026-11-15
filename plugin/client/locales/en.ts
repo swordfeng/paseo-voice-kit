@@ -340,6 +340,7 @@ export const en = {
     a11yDevices: "Loaded models run on {{devices}}.",
     a11yNoneLoaded: "No model is loaded right now.",
     a11yMemory: "Memory: {{size}} resident, combined across Voice Kit's plugin server, speech server and workers.",
+    a11yGpuMemory: "Dedicated GPU memory: {{size}}. Memory values are shown as dedicated GPU memory + resident memory.",
   },
   advanced: {
     app: "App",
