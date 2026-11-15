@@ -709,3 +709,21 @@ The deployed MLX default is now 0.6/42 for audition; GGUF main sampling remains
 0.7/42. Listening is required to judge whether expressiveness has improved.
 The native helper was replaced with rollback retained and only the plugin was
 reloaded. Existing plugin preferences were unchanged.
+
+### Shared Qwen sampling policy (2026-11-15)
+
+For the user's next audition, both GGUF and MLX now receive temperature 0.2 and
+seed 42 from one shared request builder in `server/src/engine/mod.rs`. Workers
+require those IPC fields rather than maintaining independent defaults; the MLX
+seed environment override is removed. GGUF's acoustic talker now follows the same
+temperature as its main talker, matching MLX's use of the generation temperature
+for both. Both retain top-k 50, top-p 1 and repetition penalty 1.05.
+
+47 native tests passed (3 local-fixture tests ignored). Short real Metal runs
+passed for both backends, with identical repeated English audio in each backend.
+MLX's English and Chinese read-back matched the test phrases, and tempo, initial
+unloaded state and unchanged model files passed. GGUF generated valid English and
+Chinese PCM; that short run did not transcribe them. These checks establish
+function, not whether the lower temperature improves delivery. Both workers and
+the server were deployed together with rollback copies retained; only Voice Kit
+was reloaded, and saved preferences were preserved.

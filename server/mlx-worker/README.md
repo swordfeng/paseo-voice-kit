@@ -38,7 +38,8 @@ These checks never install into Paseo or change its settings. See
 [docs/eval.md](../../docs/eval.md) for budgets, coverage, results and limitations.
 
 `VOICEKIT_MLX_PROFILE=1` records text-free timing on stderr.
-`VOICEKIT_MLX_SEED` overrides the per-request seed for controlled diagnostics.
+The speech server supplies temperature and seed through private IPC, using the
+same sampling policy for MLX and GGUF.
 `diagnostics/metal-compile-timers.patch` is an optional probe for the MLX C++
 submodule; the normal build does not apply it. It can intentionally create cold
 source-cache entries and is not part of the distributed runtime.

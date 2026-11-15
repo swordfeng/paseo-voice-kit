@@ -2,7 +2,7 @@
 
 use std::{io::{Read, Write}, path::{Path, PathBuf}, process::{Child, ChildStdin, Command, Stdio}, sync::{mpsc, Mutex, atomic::{AtomicBool, AtomicU32, Ordering}}, time::{Duration, Instant}};
 use anyhow::{Context, ensure};
-use serde_json::{json, Value};
+use serde_json::Value;
 use super::{SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 
@@ -87,7 +87,7 @@ impl Worker {
 
     fn speak(&mut self, req: SpeakRequest<'_>, timings: &mut Timings, deadline: Instant) -> anyhow::Result<Pcm> {
         let input = self.input.as_mut().context("MLX input closed")?;
-        writeln!(input, "{}", json!({"text":req.text,"voice":req.voice,"language":req.language}))?;
+        writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language))?;
         input.flush()?;
         let mut samples = Vec::new();
         loop {
@@ -229,7 +229,7 @@ mod tests {
         let worker = folder.join("voicekit-mlx-worker");
         std::fs::write(&worker, []).unwrap();
         assert!(!complete_bundle(&worker));
-        let manifest = json!({"backend":"swift-mlx","protocol":1,"files":["voicekit-mlx-worker","mlx.metallib","compat.dylib"]});
+        let manifest = serde_json::json!({"backend":"swift-mlx","protocol":1,"files":["voicekit-mlx-worker","mlx.metallib","compat.dylib"]});
         std::fs::write(folder.join("runtime.json"), manifest.to_string()).unwrap();
         std::fs::write(folder.join("mlx.metallib"), []).unwrap();
         assert!(!complete_bundle(&worker));

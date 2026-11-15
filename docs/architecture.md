@@ -118,15 +118,18 @@ a model. The pinned library is patched to construct tokenizers in memory and nev
 write or remove model folders. MLX models are added from Hugging Face or a local
 folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
 9 preset voices are supported; Base and VoiceDesign models aren't.
-The Swift worker uses temperature 0.6 and seeds each generation with 42; process reuse, bounded requests,
+The speech server sends both Qwen workers the same temperature (0.2) and seed (42)
+through private IPC, from one shared policy in `engine/mod.rs`. Both main and
+acoustic talkers use that temperature. Process reuse, bounded requests,
 worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
 and existing model selections are unchanged by the backend migration.
 Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech
 server built from the current source changes the tempo of its generated audio afterwards,
 keeping the pitch (native processing built into the server, with nothing extra to install); a
 speed of 1 leaves the audio as generated. This doesn't shorten synthesis. Other models apply
-the speed natively. The GGUF worker samples the main talker with temperature 0.7 and a fixed
-seed, so the same text and voice come out the same each time. Both are in the source for 0.1.1;
+the speed natively. Each worker resets its random seed per generation, so repeated
+text and voice are reproducible within that backend; different backends need not
+produce identical audio. These changes are in the source for 0.1.1;
 the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
 Personas (`options.personas` of the chain) pair similar voices across the enabled models.

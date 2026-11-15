@@ -3,7 +3,7 @@
 use super::{SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 use anyhow::{ensure, Context};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -156,7 +156,7 @@ impl Worker {
         writeln!(
             input,
             "{}",
-            json!({"text":req.text,"voice":req.voice,"language":language(req.language)})
+            super::qwen_request(req.text, req.voice, Some(language(req.language)))
         )?;
         input.flush()?;
         let mut samples = Vec::new();

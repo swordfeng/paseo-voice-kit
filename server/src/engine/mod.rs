@@ -12,6 +12,12 @@ use serde::Serialize;
 
 use crate::audio::Pcm;
 
+/// One sampling policy for both private Qwen worker protocols.
+fn qwen_request(text: &str, voice: &str, language: Option<&str>) -> serde_json::Value {
+    serde_json::json!({"text":text,"voice":voice,"language":language,
+        "temperature":0.2,"seed":42})
+}
+
 /// The engine itself can't serve requests right now (its server is unreachable, rejects
 /// the configured credentials, or is overloaded), as opposed to a problem with one request.
 /// The runtime marks the model unavailable so the plugin falls back, then reconnects in the

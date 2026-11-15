@@ -135,19 +135,19 @@ int main(int argc, char **argv) {
         std::string text = string_value(root, "text", ""), voice = string_value(root, "voice", "vivian"), language = string_value(root, "language", "auto");
         qt_tts_params params; qt_tts_default_params(&params);
         params.text = text.c_str(); params.speaker = voice.c_str(); params.lang = language.c_str();
-        // Keep ordinary replies reproducible and reduce expressive sampling variance. The
-        // acoustic sub-talker keeps the upstream defaults; this controls the main talker only.
-        params.temperature = 0.7f;
-        params.seed = 42;
-        // Private IPC overrides allow short, reproducible sampling comparisons.
+        // Both workers receive the same sampling policy from the speech server.
         auto temperature = yyjson_obj_get(root, "temperature");
         auto seed = yyjson_obj_get(root, "seed");
-        if ((temperature && (!yyjson_is_num(temperature) || !std::isfinite(yyjson_get_num(temperature)) || yyjson_get_num(temperature) < 0 || yyjson_get_num(temperature) > 2)) ||
-            (seed && (!yyjson_is_int(seed) || yyjson_get_sint(seed) < 0))) {
+        if (!yyjson_is_num(temperature) || !std::isfinite(yyjson_get_num(temperature)) || yyjson_get_num(temperature) < 0 || yyjson_get_num(temperature) > 2 ||
+            !yyjson_is_int(seed) || yyjson_get_sint(seed) < 0) {
             error("invalid sampling parameters"); yyjson_doc_free(doc); continue;
         }
-        if (temperature) params.temperature = float(yyjson_get_num(temperature));
-        if (seed) params.seed = yyjson_get_sint(seed);
+        params.temperature = float(yyjson_get_num(temperature));
+        params.subtalker_temperature = params.temperature;
+        params.seed = yyjson_get_sint(seed);
+        params.top_k = params.subtalker_top_k = 50;
+        params.top_p = params.subtalker_top_p = 1.0f;
+        params.repetition_penalty = 1.05f;
         std::fprintf(stderr, "[qwen] speaker=%s language=%s temperature=%.2f seed=%lld\n", voice.c_str(), language.c_str(), params.temperature, (long long)params.seed);
         params.max_new_tokens = 1200;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);

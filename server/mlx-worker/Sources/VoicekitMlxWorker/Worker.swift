@@ -10,6 +10,8 @@ struct Request: Decodable {
     let text: String
     let voice: String?
     let language: String?
+    let temperature: Float
+    let seed: UInt64
 }
 
 struct Frames: Sendable {
@@ -94,10 +96,10 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                         var count = 0
                         var ended = false
                         var tokens = 0
-                        // Reduce sampling variation for ordinary spoken replies.
-                        let parameters = GenerateParameters(maxTokens: 1200, temperature: 0.6, topP: 1, topK: 50, repetitionPenalty: 1.05)
-                        let seed = UInt64(ProcessInfo.processInfo.environment["VOICEKIT_MLX_SEED"] ?? "42") ?? 42
-                        MLXRandom.seed(seed)
+                        guard request.temperature.isFinite, (0...2).contains(request.temperature),
+                              request.seed <= UInt64(Int64.max) else { throw Failure("invalid sampling parameters") }
+                        let parameters = GenerateParameters(maxTokens: 1200, temperature: request.temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
+                        MLXRandom.seed(request.seed)
                         for try await event in model.generateStream(text: request.text, voice: voice,
                                 refAudio: nil, refText: nil, language: language,
                                 generationParameters: parameters, streamingInterval: 0.4) {
