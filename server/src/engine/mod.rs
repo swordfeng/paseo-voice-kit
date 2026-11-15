@@ -12,6 +12,29 @@ use serde::Serialize;
 
 use crate::audio::Pcm;
 
+// Keep low-temperature Qwen generations short enough to finish naturally under
+// the existing token/audio limits. Both backends assemble the complete reply.
+const QWEN_TEXT_CHUNK: usize = 80;
+
+/// Bound every model generation without cutting Unicode or dropping any source text.
+fn text_chunks(mut text: &str, limit: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    while !text.is_empty() {
+        let mut end = text.char_indices().nth(limit).map_or(text.len(), |(i, _)| i);
+        // Do not combine complete sentences into one low-temperature generation.
+        if let Some((i, c)) = text[..end].char_indices().find(|(_, c)| ".!?。！？；;\n".contains(*c)) {
+            end = i + c.len_utf8();
+        } else if end < text.len() {
+            if let Some((i, c)) = text[..end].char_indices().rev().find(|(_, c)| c.is_whitespace() || "，,、：:".contains(*c)) {
+                if i > end / 2 { end = i + c.len_utf8(); }
+            }
+        }
+        out.push(&text[..end]);
+        text = &text[end..];
+    }
+    out
+}
+
 /// One sampling policy for both private Qwen worker protocols.
 fn qwen_request(text: &str, voice: &str, language: Option<&str>) -> serde_json::Value {
     serde_json::json!({"text":text,"voice":voice,"language":language,

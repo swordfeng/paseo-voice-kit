@@ -1,6 +1,6 @@
 //! Persistent GGUF subprocess; its GGML stays isolated from whisper.cpp.
 
-use super::{SpeakRequest, Timings, TtsEngine, Voice};
+use super::{text_chunks, SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 use anyhow::{ensure, Context};
 use serde_json::Value;
@@ -313,7 +313,7 @@ impl TtsEngine for GgufTts {
         } else {
             &self.default_voice
         };
-        let chunks = text_chunks(req.text, 160);
+        let chunks = text_chunks(req.text, super::QWEN_TEXT_CHUNK);
         let deadline =
             Instant::now() + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
         let result = (|| -> anyhow::Result<Pcm> {
@@ -409,29 +409,4 @@ impl TtsEngine for GgufTts {
             }
         }
     }
-}
-
-/// Bound every model generation without cutting Unicode or dropping any source text.
-fn text_chunks(mut text: &str, limit: usize) -> Vec<&str> {
-    let mut out = Vec::new();
-    while !text.is_empty() {
-        let mut end = text
-            .char_indices()
-            .nth(limit)
-            .map_or(text.len(), |(i, _)| i);
-        if end < text.len() {
-            if let Some((i, c)) = text[..end]
-                .char_indices()
-                .rev()
-                .find(|(_, c)| c.is_whitespace() || ".!?。！？；;".contains(*c))
-            {
-                if i > end / 2 {
-                    end = i + c.len_utf8();
-                }
-            }
-        }
-        out.push(&text[..end]);
-        text = &text[end..];
-    }
-    out
 }

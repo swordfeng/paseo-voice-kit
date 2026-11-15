@@ -727,3 +727,23 @@ Chinese PCM; that short run did not transcribe them. These checks establish
 function, not whether the lower temperature improves delivery. Both workers and
 the server were deployed together with rollback copies retained; only Voice Kit
 was reloaded, and saved preferences were preserved.
+
+### Long-reply generation at temperature 0.2 (2026-11-15)
+
+The live MLX readout of the 235-character Chinese weekend paragraph failed with
+`speech token or audio limit reached`. The speech server remained up; its worker
+error rejected the response rather than returning truncated audio. MLX previously
+grouped up to 240 characters per generation, GGUF 160. An isolated 80-character
+policy passed that paragraph on MLX but still hit the 1200-token/96-second limit
+on GGUF at the same 0.2/42 sampling policy.
+
+Both backends now share sentence-by-sentence generation with an 80-character
+ceiling, clause/whitespace breaks for oversized sentences, and complete PCM
+assembly. Token/audio limits and 0.2/42 are unchanged. The exact previously failed
+paragraph passed on real Metal with both engines: MLX 53.04 seconds of audio,
+GGUF 52.08 seconds. Read-back of each first/last 12-second excerpt included the
+opening morning scene and the final weekend sentence. This checks endpoints,
+not word-for-word correctness of the entire paragraph; the full clip exceeded
+this Qwen-ASR ONNX export's 512-token audio context. 47 native tests passed,
+3 local fixtures ignored. The server was deployed with rollback retained and
+only the plugin reloaded; saved preferences were preserved.
