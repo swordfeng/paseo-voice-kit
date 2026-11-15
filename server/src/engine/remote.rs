@@ -110,12 +110,16 @@ impl TtsEngine for RemoteEngine {
         // whatever Paseo asked for.
         let body = serde_json::json!({ "model": self.remote.model, "input": req.text, "voice": voice, "response_format": "wav", "speed": req.speed });
         let started = std::time::Instant::now();
+        // The same split as recognition: an unreachable or refusing server is unavailable (the
+        // voice list cools it down), any other error concerns only this text.
         let bytes = self.handle.block_on(async {
-            let resp = self.auth(self.client.post(self.url("audio/speech"))).json(&body).send().await?;
-            if !resp.status().is_success() {
-                anyhow::bail!("remote speech failed: {}", Self::error_text(resp).await);
+            let resp = self.auth(self.client.post(self.url("audio/speech"))).json(&body).send().await.map_err(|e| self.transport(e))?;
+            let status = resp.status();
+            if !status.is_success() {
+                let message = format!("remote speech failed: {}", Self::error_text(resp).await);
+                return Err(if unavailable_status(status) { Unavailable(message).into() } else { super::RequestFailure { code: None, message }.into() });
             }
-            Ok(resp.bytes().await?)
+            resp.bytes().await.map_err(|e| self.transport(e))
         })?;
         timings.push("remote", started.elapsed().as_secs_f64() * 1000.0);
         timings.time("decode", || audio::decode_any(&bytes, Some("wav")))

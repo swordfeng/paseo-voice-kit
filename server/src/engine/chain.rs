@@ -4,11 +4,12 @@ use super::{
     SpeakRequest, Timings, TtsEngine, Voice,
 };
 use crate::{audio::Pcm, lang};
+use anyhow::Context;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug)]
@@ -26,9 +27,17 @@ impl std::fmt::Display for RoutingError {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fail {
+        No,
+        /// The engine broke (a crash or timeout).
+        Runtime,
+        /// The engine rejected this input and keeps running.
+        Request,
+    }
     struct Recorder {
         id: &'static str,
-        fail: bool,
+        fail: Fail,
         calls: Arc<Mutex<Vec<String>>>,
     }
     impl TtsEngine for Recorder {
@@ -37,8 +46,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("{}:{}", self.id, req.language.unwrap_or("")));
-            if self.fail {
-                anyhow::bail!("fixture failure");
+            match self.fail {
+                Fail::No => {}
+                Fail::Runtime => anyhow::bail!("fixture failure"),
+                Fail::Request => {
+                    return Err(super::super::RequestFailure { code: Some("token_limit".into()), message: "fixture request failure".into() }.into())
+                }
             }
             Ok(Pcm {
                 samples: vec![0.1; 240],
@@ -53,11 +66,14 @@ mod tests {
         }
     }
     fn fixture(fail_first: bool) -> (ChainTts, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
+        fixture_failing(if fail_first { Fail::Runtime } else { Fail::No })
+    }
+    fn fixture_failing(first: Fail) -> (ChainTts, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let loads = Arc::new(AtomicUsize::new(0));
         let models = [
-            ("super", vec!["en", "ja"], fail_first),
-            ("qwen", vec!["en", "ja", "zh"], false),
+            ("super", vec!["en", "ja"], first),
+            ("qwen", vec!["en", "ja", "zh"], Fail::No),
         ]
         .into_iter()
         .map(|(id, langs, fail)| {
@@ -138,16 +154,49 @@ mod tests {
         speak(&chain, "Hello.").unwrap();
         assert_eq!(*calls.lock().unwrap(), ["super:en", "qwen:en"]);
         assert_eq!(loads.load(Ordering::SeqCst), 2);
+        // One runtime failure is not a cooldown: the next request loads it again.
         speak(&chain, "Hello.").unwrap();
-        assert_eq!(
-            loads.load(Ordering::SeqCst),
-            2,
-            "failed candidate stays in cooldown"
-        );
+        assert_eq!(loads.load(Ordering::SeqCst), 3);
+        // A second one in a row is: the failed candidate is skipped without loading.
+        speak(&chain, "Hello.").unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 3, "failed candidate stays in cooldown");
+        assert!(chain.models[0].retry_after().is_some());
         assert!(
             chain.failure().is_none(),
-            "one failure must not disable a healthy voice"
+            "failures must not disable a healthy voice"
         );
+    }
+    #[test]
+    fn per_model_voices_single_model_preview_and_run_report() {
+        let (mut chain, calls, _) = fixture(false);
+        chain.custom.insert("qwen".into(), "serena".into());
+        speak(&chain, "Hello.").unwrap();
+        assert_eq!(chain.last_runs().unwrap()[0]["model"], "super");
+        speak(&chain, "你好。").unwrap();
+        let runs = chain.last_runs().unwrap();
+        assert_eq!(runs.as_array().unwrap().len(), 1, "each request reports only its own parts");
+        assert_eq!(runs[0]["model"], "qwen");
+        assert_eq!(runs[0]["voice"], "serena", "the model's own voice, whatever the request names");
+        assert_eq!(runs[0]["language"], "zh");
+        // A model's preview reads with that model only, even where another comes first.
+        chain
+            .synthesize_route("qwen", SpeakRequest { text: "Hello.", voice: "default", speed: 1.0, language: None }, &mut Timings::default())
+            .unwrap();
+        assert_eq!(calls.lock().unwrap().last().unwrap(), "qwen:en");
+        assert_eq!(chain.last_runs().unwrap()[0]["model"], "qwen");
+        assert!(chain
+            .synthesize_route("missing", SpeakRequest { text: "Hello.", voice: "default", speed: 1.0, language: None }, &mut Timings::default())
+            .is_err());
+    }
+    #[test]
+    fn request_failure_falls_back_for_that_text_only() {
+        let (chain, calls, loads) = fixture_failing(Fail::Request);
+        speak(&chain, "Hello.").unwrap();
+        speak(&chain, "Hello.").unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["super:en", "qwen:en", "super:en", "qwen:en"], "the model is tried again for the next request");
+        assert_eq!(loads.load(Ordering::SeqCst), 2, "a request failure doesn't unload the model");
+        assert!(chain.models[0].loaded_engine().is_some());
+        assert!(chain.models[0].retry_after().is_none(), "nor start a cooldown");
     }
     #[test]
     fn disabled_qwen_does_not_supply_or_load_chinese() {
@@ -175,7 +224,7 @@ mod tests {
             .map(|&(id, langs, fail)| {
                 let calls = calls.clone();
                 Arc::new(Route::lazy(
-                    Box::new(move || Some(Ok(Arc::new(Recorder { id, fail, calls: calls.clone() })))),
+                    Box::new(move || Some(Ok(Arc::new(Recorder { id, fail: if fail { Fail::Runtime } else { Fail::No }, calls: calls.clone() })))),
                     id.into(),
                     id.into(),
                     langs.iter().map(|l| l.to_string()).collect(),
@@ -225,6 +274,7 @@ pub struct ChainTts {
     custom: BTreeMap<String, String>,
     approximate: BTreeSet<String>,
     last_error: Mutex<Option<Value>>,
+    last_runs: Mutex<Vec<Value>>,
 }
 impl ChainTts {
     pub fn new(
@@ -241,6 +291,7 @@ impl ChainTts {
             custom,
             approximate,
             last_error: Mutex::new(None),
+            last_runs: Mutex::new(Vec::new()),
         }
     }
     fn language<'a>(&self, route: &Route, language: &'a str) -> Option<&'a str> {
@@ -293,11 +344,12 @@ impl ChainTts {
         *self.last_error.lock().unwrap() = Some(json!({"code":code,"languages":languages,"at":at}));
         RoutingError { code, languages }.into()
     }
+    /// The voice chosen for this model (`model_voices`), whatever the request names; otherwise a
+    /// voice the request names that the model has, a persona from a hand-written catalog, or the
+    /// model's default.
     fn voice(&self, route: &Route, requested: &str) -> String {
-        if requested == "custom" {
-            if let Some(v) = self.custom.get(&route.model) {
-                return v.clone();
-            }
+        if let Some(v) = self.custom.get(&route.model) {
+            return v.clone();
         }
         if route.catalog_voices.iter().any(|v| v.id == requested) {
             return requested.into();
@@ -320,7 +372,31 @@ impl ChainTts {
     }
 }
 impl TtsEngine for ChainTts {
+    fn synthesize_route(&self, model: &str, req: SpeakRequest<'_>, timings: &mut Timings) -> anyhow::Result<Pcm> {
+        let route = self.models.iter().find(|r| r.model == model).context("this voice model isn't enabled")?;
+        if let Some(reason) = route.unrunnable() {
+            anyhow::bail!("{reason}");
+        }
+        let engine = route.engine().context("this voice model isn't available right now")?;
+        // A preview reads with the voice picked on screen when the model has it, before the
+        // choice is saved.
+        let known = |id: &str| engine.voices().iter().any(|v| v.id == id) || route.catalog_voices.iter().any(|v| v.id == id);
+        let voice = if known(req.voice) { req.voice.to_string() } else { self.voice(route, req.voice) };
+        // As for a voice list request: the request's language, else the detected one, else English
+        // for plain ASCII text.
+        let language = req.language.map(str::to_string)
+            .or_else(|| lang::runs(req.text).into_iter().find_map(|r| r.lang.map(str::to_string)))
+            .or_else(|| req.text.is_ascii().then(|| "en".to_string()));
+        let pcm = engine.synthesize(SpeakRequest { text: req.text, voice: &voice, language: language.as_deref().and_then(|l| self.language(route, l)), speed: req.speed }, timings)?;
+        route.succeeded();
+        *self.last_runs.lock().unwrap() = vec![json!({"model": route.model, "voice": voice, "language": language})];
+        Ok(pcm)
+    }
+    fn last_runs(&self) -> Option<Value> {
+        Some(Value::Array(self.last_runs.lock().unwrap().clone()))
+    }
     fn synthesize(&self, req: SpeakRequest<'_>, timings: &mut Timings) -> anyhow::Result<Pcm> {
+        self.last_runs.lock().unwrap().clear();
         let runs = lang::runs(req.text);
         let languages: Vec<_> = runs
             .iter()
@@ -352,7 +428,6 @@ impl TtsEngine for ChainTts {
         if !missing.is_empty() {
             return Err(self.record_error("unsupported_language", missing.into_iter().collect()));
         }
-        let deadline = Instant::now() + Duration::from_secs(180);
         let mut selected = BTreeMap::<String, usize>::new();
         let mut rejected = BTreeSet::new();
         let mut samples = Vec::new();
@@ -367,7 +442,9 @@ impl TtsEngine for ChainTts {
             }
             let mut output = None;
             for i in candidates {
-                if rejected.contains(&i) || Instant::now() >= deadline {
+                // Every engine bounds its own work, so there is no overall cutoff that would drop
+                // the audio already made for earlier sentences.
+                if rejected.contains(&i) {
                     continue;
                 }
                 let route = &self.models[i];
@@ -391,9 +468,14 @@ impl TtsEngine for ChainTts {
                 ) {
                     Ok(pcm) => {
                         route.succeeded();
+                        self.last_runs.lock().unwrap().push(json!({"model": route.model, "voice": voice, "language": language}));
                         selected.insert(language.clone(), i);
                         output = Some(pcm);
                         break;
+                    }
+                    Err(error) if super::is_request_failure(&error) => {
+                        // Only this text failed: the model stays loaded for the next sentence.
+                        tracing::warn!(model=route.model,error=%error,"voice candidate failed this sentence; trying next enabled model");
                     }
                     Err(error) => {
                         tracing::warn!(model=route.model,error=%error,"voice candidate failed; trying next enabled model");

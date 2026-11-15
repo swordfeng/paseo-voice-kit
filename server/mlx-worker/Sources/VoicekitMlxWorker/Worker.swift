@@ -14,6 +14,8 @@ struct Request: Decodable {
     let seed: UInt64?
     let op: String?
     let instruction: String?
+    /// Frame cap for this text, set by the speech server from its length (at most 1200).
+    let max_new_tokens: Int?
 }
 
 struct Frames: Sendable {
@@ -32,7 +34,9 @@ struct Frames: Sendable {
 }
 struct Failure: Error, CustomStringConvertible {
     let description: String
-    init(_ description: String) { self.description = description }
+    /// Machine-readable cause for the speech server, e.g. "token_limit".
+    let code: String?
+    init(_ description: String, code: String? = nil) { self.description = description; self.code = code }
 }
 
 // Opt-in diagnostics never include request text and never use framed stdout.
@@ -109,7 +113,8 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                         var tokens = 0
                         guard let temperature = request.temperature, let seed = request.seed,
                               temperature.isFinite, (0...2).contains(temperature), seed <= UInt64(Int64.max) else { throw Failure("invalid sampling parameters") }
-                        let parameters = GenerateParameters(maxTokens: 1200, temperature: temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
+                        let maxTokens = min(max(request.max_new_tokens ?? 1200, 16), 1200)
+                        let parameters = GenerateParameters(maxTokens: maxTokens, temperature: temperature, topP: 1, topK: 50, repetitionPenalty: 1.05)
                         MLXRandom.seed(seed)
                         for try await event in model.generateStream(text: request.text, voice: voicePrompt,
                                 refAudio: nil, refText: nil, language: language,
@@ -128,7 +133,7 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                                 profile("audio", ["samples_before": count, "ms": Date().timeIntervalSince(started) * 1000])
                                 let samples = chunk.asArray(Float.self)
                                 count += samples.count
-                                guard count < 24_000 * 96 else { throw Failure("speech token or audio limit reached") }
+                                guard count < maxTokens * 1920 else { throw Failure("speech token limit reached; refusing truncated audio", code: "token_limit") }
                                 var pcm = Data(capacity: samples.count * 2)
                                 for sample in samples {
                                     guard sample.isFinite else { throw Failure("non-finite audio") }
@@ -142,11 +147,13 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                                 }
                             }
                         }
-                        guard ended else { throw Failure("speech token limit reached; refusing truncated audio") }
+                        guard ended else { throw Failure("speech token limit reached; refusing truncated audio", code: "token_limit") }
                         guard count > 0 else { throw Failure("empty speech") }
                         try frames.send("done", fields: ["mlx_peak_bytes":Memory.peakMemory])
                     } catch {
-                        try frames.send("error", fields: ["error":String(describing: error)])
+                        var fields: [String: Any] = ["error": String(describing: error)]
+                        if let code = (error as? Failure)?.code { fields["code"] = code }
+                        try frames.send("error", fields: fields)
                     }
                 }
             }

@@ -232,6 +232,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir).context("create capture dir")?;
     }
     std::fs::create_dir_all(&args.store.models_dir).context("create models dir")?;
+    // No download runs yet: abandoned partial files can go.
+    download::gc_partials(&args.store.models_dir);
 
     // Load the ggml backends (Vulkan only if its loader and a GPU exist) in the background:
     // initializing a GPU can take seconds (Metal compiles its library), and the handshake below
@@ -309,6 +311,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 tick.tick().await;
                 let rt = runtime.clone();
                 let _ = tokio::task::spawn_blocking(move || { rt.unload_idle(); rt.retry_failed(); }).await;
+                // Automatic downloads that failed are tried again after a while.
+                if runtime.settings.auto_pull && !runtime.settings.stub {
+                    for entry in runtime.missing_models() {
+                        if !runtime.downloads.failed_and_due(&entry.id) { continue; }
+                        let rt = runtime.clone();
+                        tokio::spawn(async move {
+                            tracing::info!(model = entry.id, "retrying a failed download");
+                            match rt.downloads.ensure(&rt.store, &entry).await {
+                                Ok(()) => { let r = rt.clone(); let _ = tokio::task::spawn_blocking(move || r.recover_downloaded(&entry.id)).await; }
+                                Err(err) => tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed"),
+                            }
+                        });
+                    }
+                }
             }
         });
     }

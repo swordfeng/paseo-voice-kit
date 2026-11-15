@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Context;
@@ -20,7 +21,20 @@ pub struct Progress {
     pub total: Option<u64>,
     pub phase: &'static str,
     pub error: Option<String>,
+    #[serde(skip)]
+    failed_at: Option<Instant>,
 }
+
+/// A connection that sends nothing for this long fails the download, so it can be retried.
+const STALL: Duration = Duration::from_secs(60);
+const CONNECT: Duration = Duration::from_secs(15);
+/// A failed automatic download is tried again after this long.
+pub const RETRY_FAILED_AFTER: Duration = Duration::from_secs(5 * 60);
+/// Partial downloads nobody resumed for this long are deleted at startup.
+const STALE_PARTIAL: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Separates the model id from the rest of a partial file name. Model ids can't contain it, so
+/// one model's partial files are never mistaken for another's.
+const SEP: char = '~';
 
 #[derive(Clone, Default)]
 pub struct Downloads {
@@ -45,6 +59,20 @@ impl Downloads {
         self.inner.lock().unwrap().get(key).and_then(|p| p.error.clone())
     }
 
+    /// A download that failed at least `RETRY_FAILED_AFTER` ago (automatic retries wait this long).
+    pub fn failed_and_due(&self, key: &str) -> bool {
+        self.inner.lock().unwrap().get(key).is_some_and(|p| p.error.is_some() && p.failed_at.is_none_or(|t| t.elapsed() >= RETRY_FAILED_AFTER))
+    }
+
+    /// Not downloading now, and not a recent failure: an automatic download may start.
+    pub fn may_start(&self, key: &str) -> bool {
+        match self.inner.lock().unwrap().get(key) {
+            None => true,
+            Some(p) if p.error.is_some() => p.failed_at.is_none_or(|t| t.elapsed() >= RETRY_FAILED_AFTER),
+            Some(p) => p.phase == "done",
+        }
+    }
+
     fn set(&self, key: &str, f: impl FnOnce(&mut Progress)) {
         let mut map = self.inner.lock().unwrap();
         f(map.entry(key.to_string()).or_default());
@@ -66,7 +94,10 @@ impl Downloads {
     fn finish(&self, key: &str, result: &anyhow::Result<()>) {
         match result {
             Ok(()) => self.set(key, |p| p.phase = "done"),
-            Err(err) => self.set(key, |p| p.error = Some(format!("{err:#}"))),
+            Err(err) => self.set(key, |p| {
+                p.error = Some(format!("{err:#}"));
+                p.failed_at = Some(Instant::now());
+            }),
         }
     }
 
@@ -78,11 +109,17 @@ impl Downloads {
         anyhow::ensure!(store.paseo_model(entry).is_none(), "shared model {} is managed by Paseo", entry.id);
         anyhow::ensure!(!entry.download.is_empty(), "model {} has no download source", entry.id);
         self.begin(&entry.id, entry.size_bytes())?;
-        let result = self.install(store, entry).await;
+        // A download that leaves the model incomplete is a failure like any other, so it is
+        // reported and not started again on every request.
+        let result = match self.install(store, entry).await {
+            Ok(()) if store.locate(entry).is_none() => Err(anyhow::anyhow!("model {} is incomplete after download (its files don't match the catalog)", entry.id)),
+            other => other,
+        };
         self.finish(&entry.id, &result);
-        result?;
-        anyhow::ensure!(store.locate(entry).is_some(), "model {} is incomplete after download", entry.id);
-        Ok(())
+        if result.is_ok() {
+            clean_partials(&store.models_dir, &entry.id).await;
+        }
+        result
     }
 
     /// Download the CoreML encoder for a whisper entry (next to its model file).
@@ -96,7 +133,8 @@ impl Downloads {
         let key = coreml_key(&entry.id);
         self.begin(&key, download.size)?;
         let into = target.parent().map(Path::to_path_buf).unwrap_or_default();
-        let result = self.fetch_into(&key, &store.models_dir, download, &into, entry).await;
+        let stem = format!("{}{SEP}coreml{SEP}{}", entry.id, url_file_name(&download.url));
+        let result = self.fetch_into(&key, &store.models_dir, download, &into, entry, &stem).await;
         self.finish(&key, &result);
         result?;
         anyhow::ensure!(target.exists(), "CoreML archive did not contain {}", target.display());
@@ -106,16 +144,32 @@ impl Downloads {
     async fn install(&self, store: &Store, entry: &ModelEntry) -> anyhow::Result<()> {
         let target = store.own_dir(entry);
         let staging_root = store.models_dir.join(".partial");
-        let staged = staging_root.join(format!("{}.dir", entry.id));
-        if staged.exists() {
+        let staged = staging_root.join(format!("{}{SEP}dir", entry.id));
+        // Files finished by an interrupted attempt are kept, as long as the entry's downloads
+        // are still the same ones.
+        let fingerprint = entry.download.iter().map(|d| format!("{}|{}|{}|{}", d.url, d.sha256.as_deref().unwrap_or(""), d.file.as_deref().unwrap_or(""), d.unpack.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n");
+        let marker = staged.join(".voicekit-entry");
+        if staged.exists() && tokio::fs::read_to_string(&marker).await.ok().as_deref() != Some(fingerprint.as_str()) {
             tokio::fs::remove_dir_all(&staged).await.ok();
         }
         tokio::fs::create_dir_all(&staged).await?;
+        tokio::fs::write(&marker, &fingerprint).await?;
         let mut done_before = 0u64;
-        for download in &entry.download {
-            self.fetch_into(&entry.id, &store.models_dir, download, &staged, entry).await?;
+        for (index, download) in entry.download.iter().enumerate() {
+            let fetched = staged.join(format!(".voicekit-fetched-{index}"));
+            if !tokio::fs::try_exists(&fetched).await.unwrap_or(false) {
+                let stem = format!("{}{SEP}{index}{SEP}{}", entry.id, url_file_name(&download.url));
+                self.fetch_into(&entry.id, &store.models_dir, download, &staged, entry, &stem).await?;
+                tokio::fs::write(&fetched, b"").await?;
+            }
             done_before += download.size;
             self.set(&entry.id, |p| p.downloaded = done_before);
+        }
+        let mut items = tokio::fs::read_dir(&staged).await?;
+        while let Some(item) = items.next_entry().await? {
+            if item.file_name().to_string_lossy().starts_with(".voicekit-") {
+                tokio::fs::remove_file(item.path()).await.ok();
+            }
         }
         if target.exists() {
             tokio::fs::remove_dir_all(&target).await.ok();
@@ -125,12 +179,14 @@ impl Downloads {
     }
 
     /// Fetch one download (file or archive) and place its contents into `into`.
-    async fn fetch_into(&self, key: &str, models_dir: &Path, download: &Download, into: &Path, entry: &ModelEntry) -> anyhow::Result<()> {
+    /// `stem` names this download's partial file uniquely (id, position in the entry, URL name):
+    /// two files with the same name in different folders never share one.
+    async fn fetch_into(&self, key: &str, models_dir: &Path, download: &Download, into: &Path, entry: &ModelEntry, stem: &str) -> anyhow::Result<()> {
         let staging = models_dir.join(".partial");
         tokio::fs::create_dir_all(&staging).await?;
         tokio::fs::create_dir_all(into).await?;
         let name = url_file_name(&download.url);
-        let part = staging.join(format!("{}-{}.part", entry.id, name));
+        let part = staging.join(format!("{stem}.part"));
         let digest = self.fetch(key, &download.url, &part, download.sha256.as_deref()).await?;
         if let Some(expected) = &download.sha256 {
             if &digest != expected {
@@ -155,7 +211,7 @@ impl Downloads {
             }
             Some(kind) => {
                 self.set(key, |p| p.phase = "unpacking");
-                let unpack_dir = staging.join(format!("{}-{}.unpack", entry.id, name));
+                let unpack_dir = staging.join(format!("{stem}.unpack"));
                 let (archive, out, kind) = (part.clone(), unpack_dir.clone(), kind.to_string());
                 tokio::task::spawn_blocking(move || unpack(&archive, &out, &kind)).await.context("unpack task")??;
                 merge_single_root(&unpack_dir, into)?;
@@ -169,7 +225,11 @@ impl Downloads {
 
     /// Stream `url` into `part`, resuming a partial file. Returns the sha256 of the whole file.
     async fn fetch(&self, key: &str, url: &str, part: &Path, expected_sha: Option<&str>) -> anyhow::Result<String> {
-        let client = reqwest::Client::builder().user_agent(concat!("voicekit/", env!("CARGO_PKG_VERSION"))).build()?;
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("voicekit/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(CONNECT)
+            .build()?;
+        let stalled = || anyhow::anyhow!("download stalled: no data for {} s", STALL.as_secs());
         let mut offset = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
         // Stream the prefix rather than allocating a potentially gigabyte-sized buffer.
         let mut hasher = Sha256::new();
@@ -190,10 +250,10 @@ impl Downloads {
         if offset > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
-        let mut resp = req.send().await?;
+        let mut resp = tokio::time::timeout(STALL, req.send()).await.map_err(|_| stalled())??;
         if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && offset > 0 {
             // Stale/oversized partial file: retry from zero once, without a Range header.
-            resp = client.get(url).send().await?;
+            resp = tokio::time::timeout(STALL, client.get(url).send()).await.map_err(|_| stalled())??;
             offset = 0;
             hasher = Sha256::new();
         }
@@ -219,7 +279,7 @@ impl Downloads {
         let mut stream = resp.bytes_stream();
         let mut done = offset;
         let mut last = 0u64;
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = tokio::time::timeout(STALL, stream.next()).await.map_err(|_| stalled())? {
             let chunk = chunk?;
             hasher.update(&chunk);
             file.write_all(&chunk).await?;
@@ -234,6 +294,34 @@ impl Downloads {
             anyhow::ensure!(done == expected, "download truncated ({done} of {expected} bytes)");
         }
         Ok(hex::encode(hasher.finalize()))
+    }
+}
+
+/// Delete a model's partial downloads (after it installed, or when it is removed).
+pub async fn clean_partials(models_dir: &Path, id: &str) {
+    let staging = models_dir.join(".partial");
+    let Ok(mut items) = tokio::fs::read_dir(&staging).await else { return };
+    let prefix = format!("{id}{SEP}");
+    while let Ok(Some(item)) = items.next_entry().await {
+        if item.file_name().to_string_lossy().starts_with(&prefix) {
+            let path = item.path();
+            if path.is_dir() { tokio::fs::remove_dir_all(&path).await.ok(); } else { tokio::fs::remove_file(&path).await.ok(); }
+        }
+    }
+}
+
+/// At startup, before any download runs: delete partial downloads untouched for a week, and
+/// files left in the old naming scheme, which a resume no longer finds.
+pub fn gc_partials(models_dir: &Path) {
+    let Ok(items) = std::fs::read_dir(models_dir.join(".partial")) else { return };
+    for item in items.flatten() {
+        let old = item.metadata().and_then(|m| m.modified()).ok().and_then(|t| SystemTime::now().duration_since(t).ok()).is_none_or(|age| age >= STALE_PARTIAL);
+        let legacy = !item.file_name().to_string_lossy().contains(SEP);
+        if old || legacy {
+            let path = item.path();
+            tracing::info!(path = %path.display(), "removing an abandoned partial download");
+            if path.is_dir() { std::fs::remove_dir_all(&path).ok(); } else { std::fs::remove_file(&path).ok(); }
+        }
     }
 }
 
@@ -338,6 +426,87 @@ mod tests {
         assert_eq!(tokio::fs::read(&part).await.unwrap(), b"tiny");
         server.await.unwrap();
         tokio::fs::remove_file(part).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn multi_file_install_resumes_without_refetching_finished_files() {
+        let root = std::env::temp_dir().join(format!("vk-multi-{}", std::process::id()));
+        tokio::fs::remove_dir_all(&root).await.ok();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // Two files with the same name in different folders; the second connection drops once.
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = requests.clone();
+        let server = tokio::spawn(async move {
+            let mut dropped = false;
+            loop {
+                let Ok(Ok((mut socket, _))) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await else { break };
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                seen.lock().unwrap().push(path.clone());
+                let response: &[u8] = match path.as_str() {
+                    "/a/config.json" => b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nAAAA",
+                    "/b/config.json" if !dropped => { dropped = true; b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nBB" }
+                    "/b/config.json" => b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nBBBB",
+                    _ => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                };
+                socket.write_all(response).await.unwrap();
+                if requests_done(&seen) { break; }
+            }
+        });
+        fn requests_done(seen: &Arc<Mutex<Vec<String>>>) -> bool { seen.lock().unwrap().len() >= 3 }
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "multi-fixture", "kind": "tts", "label": "fixture", "engine": "whisper",
+            "files": {"model": "a/config.json", "codec": "b/config.json"},
+            "download": [
+                {"url": format!("http://{address}/a/config.json"), "file": "a/config.json", "size": 4},
+                {"url": format!("http://{address}/b/config.json"), "file": "b/config.json", "size": 4},
+            ],
+        })).unwrap();
+        let store = Store { models_dir: root.clone(), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false };
+        let downloads = Downloads::default();
+        assert!(downloads.ensure(&store, &entry).await.is_err());
+        assert!(downloads.error("multi-fixture").is_some());
+        assert!(!downloads.failed_and_due("multi-fixture"), "an automatic retry waits after a failure");
+        assert!(!downloads.may_start("multi-fixture"));
+        downloads.ensure(&store, &entry).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(*requests.lock().unwrap(), ["/a/config.json", "/b/config.json", "/b/config.json"], "the finished file is not fetched again");
+        let installed = store.own_dir(&entry);
+        assert_eq!(tokio::fs::read(installed.join("a/config.json")).await.unwrap(), b"AAAA");
+        assert_eq!(tokio::fs::read(installed.join("b/config.json")).await.unwrap(), b"BBBB");
+        assert!(std::fs::read_dir(installed.join("..").join(".partial")).unwrap().next().is_none(), "partial files are cleaned up");
+        assert!(!std::fs::read_dir(&installed).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".voicekit-")));
+        tokio::fs::remove_dir_all(root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_download_that_leaves_the_model_incomplete_is_a_failure() {
+        let root = std::env::temp_dir().join(format!("vk-incomplete-{}", std::process::id()));
+        tokio::fs::remove_dir_all(&root).await.ok();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntiny").await.unwrap();
+        });
+        // The catalog expects a file the download doesn't provide.
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "incomplete-fixture", "kind": "stt", "label": "fixture", "engine": "whisper",
+            "files": {"model": "missing.bin"},
+            "download": [{"url": format!("http://{address}/x.bin"), "file": "x.bin", "size": 4}],
+        })).unwrap();
+        let store = Store { models_dir: root.clone(), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false };
+        let downloads = Downloads::default();
+        assert!(downloads.ensure(&store, &entry).await.is_err());
+        server.await.unwrap();
+        assert!(downloads.error("incomplete-fixture").unwrap().contains("incomplete"));
+        assert!(!downloads.may_start("incomplete-fixture"), "not started again on the next request");
+        tokio::fs::remove_dir_all(root).await.ok();
     }
 
     #[test]

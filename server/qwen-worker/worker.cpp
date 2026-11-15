@@ -36,6 +36,8 @@ static void frame(const std::string &json, const std::vector<uint8_t> &pcm = {})
     std::cout.flush();
 }
 static void error(const std::string &s) { frame("{\"event\":\"error\",\"bytes\":0,\"error\":" + escaped(s) + "}"); }
+// `code` lets the speech server tell causes apart, e.g. "token_limit" for a generation that ran to its cap.
+static void error(const std::string &s, const char *code) { frame("{\"event\":\"error\",\"bytes\":0,\"error\":" + escaped(s) + ",\"code\":\"" + code + "\"}"); }
 static std::string string_value(yyjson_val *root, const char *key, const char *fallback) {
     const char *s = yyjson_get_str(yyjson_obj_get(root, key)); return s ? s : fallback;
 }
@@ -160,16 +162,23 @@ int main(int argc, char **argv) {
         params.top_p = params.subtalker_top_p = 1.0f;
         params.repetition_penalty = 1.05f;
         std::fprintf(stderr, "[qwen] speaker=%s language=%s temperature=%.2f seed=%lld\n", voice.c_str(), language.c_str(), params.temperature, (long long)params.seed);
-        params.max_new_tokens = 1200;
+        // The server caps each chunk by its text length (at most 1200 frames, 96 s).
+        auto limit = yyjson_obj_get(root, "max_new_tokens");
+        params.max_new_tokens = yyjson_is_int(limit) ? int(std::clamp<int64_t>(yyjson_get_sint(limit), 16, 1200)) : 1200;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         params.cancel = expired; params.cancel_user_data = &deadline;
         qt_audio audio = {};
         auto rc = qt_synthesize(context, &params, &audio);
         if (rc != QT_STATUS_OK) error(qt_last_error());
-        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0 || audio.n_samples >= params.max_new_tokens * 1920) {
-            std::fprintf(stderr, "[qwen] rejected audio: channels=%d rate=%d samples=%d sample_limit=%d\n",
-                         audio.channels, audio.sample_rate, audio.n_samples, params.max_new_tokens * 1920);
-            error("empty or token-limited audio");
+        else if (audio.n_samples >= params.max_new_tokens * 1920) {
+            std::fprintf(stderr, "[qwen] rejected audio: generation reached its limit, samples=%d sample_limit=%d\n",
+                         audio.n_samples, params.max_new_tokens * 1920);
+            error("speech token limit reached; refusing truncated audio", "token_limit");
+        }
+        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0) {
+            std::fprintf(stderr, "[qwen] rejected audio: channels=%d rate=%d samples=%d\n",
+                         audio.channels, audio.sample_rate, audio.n_samples);
+            error("empty or malformed audio");
         }
         else {
             std::vector<uint8_t> pcm(size_t(audio.n_samples) * 2);

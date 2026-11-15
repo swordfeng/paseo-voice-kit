@@ -1,9 +1,9 @@
 //! Owned MLX subprocess: no listening port, no daemon changes, and no installs in requests.
 
-use std::{io::{Read, Write}, path::{Path, PathBuf}, process::{Child, ChildStdin, Command, Stdio}, sync::{mpsc, Mutex, atomic::{AtomicBool, AtomicU32, Ordering}}, time::{Duration, Instant}};
+use std::{io::{Read, Write}, path::{Path, PathBuf}, process::{Child, ChildStdin, Command, Stdio}, sync::{mpsc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use anyhow::{Context, ensure};
 use serde_json::Value;
-use super::{text_chunks, SpeakRequest, Timings, TtsEngine, Voice};
+use super::{qwen_speak_chunk, qwen_worker_error, text_chunks, QwenHealth, QwenSampling, SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 
 const MAX_AUDIO: usize = 24_000 * 2 * 180;
@@ -81,7 +81,7 @@ impl Worker {
 
     fn receive(&self, timeout: Duration) -> anyhow::Result<Frame> {
         let frame = self.output.recv_timeout(timeout).context("MLX worker response timed out or disconnected")??;
-        if frame.header["event"] == "error" { anyhow::bail!("MLX synthesis failed: {}", frame.header["error"]); }
+        if frame.header["event"] == "error" { return Err(qwen_worker_error(&frame.header, "MLX")); }
         Ok(frame)
     }
 
@@ -96,9 +96,9 @@ impl Worker {
         Ok(count as usize)
     }
 
-    fn speak(&mut self, req: SpeakRequest<'_>, timings: &mut Timings, deadline: Instant) -> anyhow::Result<Pcm> {
+    fn speak(&mut self, req: SpeakRequest<'_>, sampling: QwenSampling, timings: &mut Timings, deadline: Instant) -> anyhow::Result<Pcm> {
         let input = self.input.as_mut().context("MLX input closed")?;
-        writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language)?)?;
+        writeln!(input, "{}", super::qwen_request(req.text, req.voice, req.language, sampling)?)?;
         input.flush()?;
         let mut samples = Vec::new();
         loop {
@@ -131,14 +131,14 @@ impl Drop for Worker {
     }
 }
 
-pub struct MlxTts { worker: Mutex<Option<Worker>>, voices: Vec<Voice>, default_voice: String, binary: PathBuf, model: PathBuf, running: AtomicBool, failure: Mutex<Option<(String, Instant)>>, failures: AtomicU32 }
+pub struct MlxTts { worker: Mutex<Option<Worker>>, voices: Vec<Voice>, default_voice: String, binary: PathBuf, model: PathBuf, running: AtomicBool, health: QwenHealth }
 
 impl MlxTts {
     pub fn load(entry: &ModelEntry, root: &Path, use_gpu: bool) -> anyhow::Result<Self> {
         ensure!(use_gpu, "Qwen3-TTS MLX requires GPU acceleration");
         let binary = worker_path().context("The native MLX worker is missing from this speech server installation")?;
         let voices = entry.voices.iter().map(|v| Voice { id:v.id.clone(), label:v.label.clone(), language:v.language.clone(), gender:v.gender.clone(), featured:v.featured }).collect();
-        Ok(Self { worker: Mutex::new(None), voices, default_voice: entry.default_voice.clone().unwrap_or_else(|| "vivian".into()), binary, model: root.to_path_buf(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) })
+        Ok(Self { worker: Mutex::new(None), voices, default_voice: entry.default_voice.clone().unwrap_or_else(|| "vivian".into()), binary, model: root.to_path_buf(), running: AtomicBool::new(false), health: QwenHealth::default() })
     }
 }
 
@@ -157,10 +157,7 @@ impl TtsEngine for MlxTts {
         }
         let mut worker = self.worker.lock().unwrap_or_else(|p| p.into_inner());
         if worker.is_none() {
-            let delay = Duration::from_secs(60) * 2u32.pow(self.failures.load(Ordering::SeqCst).saturating_sub(1).min(5));
-            if let Some((error, at)) = self.failure.lock().unwrap().as_ref() {
-                if at.elapsed() < delay { anyhow::bail!("MLX worker retry is cooling down: {error}"); }
-            }
+            if let Some(error) = self.health.cooling() { anyhow::bail!("MLX worker retry is cooling down: {error}"); }
         }
         let requested_voice = req.voice.to_ascii_lowercase();
         let voice = if self.voices.iter().any(|v| v.id == requested_voice) { &requested_voice } else { &self.default_voice };
@@ -175,43 +172,31 @@ impl TtsEngine for MlxTts {
             }
             let generation = worker.as_mut().context("Qwen worker stopped before text budgeting")?;
             let chunks = text_chunks(req.text, |text| generation.token_count(text, planning_deadline))?;
-            let deadline = started + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
+            // Each chunk is bounded by its frame cap (and the GGUF worker's own 60 s), so the whole
+            // request gets that per chunk: accepted text never times out just for being long.
+            let deadline = started + Duration::from_secs(30 + chunks.len() as u64 * 60);
             let mut samples = Vec::new();
             for text in chunks {
                 if !text.chars().any(char::is_alphanumeric) { continue; }
-                let chunk = generation.speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
+                let tokens = generation.token_count(text, deadline)?;
+                let chunk = qwen_speak_chunk(tokens, |sampling| generation.speak(SpeakRequest { text, voice, ..req }, sampling, timings, deadline))?;
                 ensure!(samples.len() + chunk.samples.len() <= 24_000 * 600, "speech exceeds ten-minute output limit");
                 samples.extend(chunk.samples);
             }
             ensure!(!samples.is_empty(), "MLX produced no speech");
             Ok(Pcm { samples, sample_rate: 24_000 })
         })();
-        if let Err(error) = &result {
-            self.running.store(false, Ordering::SeqCst); worker.take();
-            self.failures.fetch_add(1, Ordering::SeqCst);
-            *self.failure.lock().unwrap() = Some((format!("{error:#}"), Instant::now()));
-        } else { self.failures.store(0, Ordering::SeqCst); self.failure.lock().unwrap().take(); }
+        // A request failure leaves the worker serving; a crash, failed start or timeout drops it.
+        if self.health.record(&result) { self.running.store(false, Ordering::SeqCst); worker.take(); }
         drop(worker);
         let pcm = result?;
         if req.speed == 1.0 { Ok(pcm) } else { timings.time("tempo", || pcm.with_tempo(req.speed)) }
     }
     fn voices(&self) -> Vec<Voice> { self.voices.clone() }
     fn accelerator(&self) -> &str { if self.running.load(Ordering::SeqCst) { "metal" } else { "idle" } }
-    fn failure(&self) -> Option<String> { self.failure.lock().unwrap().as_ref().map(|(error, _)| error.clone()) }
-    fn retry_failed(&self) {
-        let delay = Duration::from_secs(60) * 2u32.pow(self.failures.load(Ordering::SeqCst).saturating_sub(1).min(5));
-        if !self.failure.lock().unwrap().as_ref().is_some_and(|(_, at)| at.elapsed() >= delay) { return; }
-        let Ok(mut worker) = self.worker.try_lock() else { return };
-        match Worker::spawn(&self.binary, &self.model) {
-            Ok(loaded) => {
-                *worker = Some(loaded); self.running.store(true, Ordering::SeqCst); self.failure.lock().unwrap().take(); self.failures.store(0, Ordering::SeqCst);
-            }
-            Err(error) => {
-                self.failures.fetch_add(1, Ordering::SeqCst);
-                *self.failure.lock().unwrap() = Some((format!("{error:#}"), Instant::now()));
-            }
-        }
-    }
+    fn failure(&self) -> Option<String> { self.health.failure() }
+    // No background retry: a worker starts again only for a request (after any cooldown), so
+    // nothing allocates GPU memory while no one is waiting for speech.
 }
 
 
@@ -242,17 +227,24 @@ mod tests {
 
     #[test]
     fn standalone_failure_is_reported_and_retries_back_off() {
-        let engine = MlxTts { worker: Mutex::new(None), voices: vec![], default_voice: "vivian".into(), binary: PathBuf::from("/nonexistent/voicekit-mlx-worker"), model: std::env::temp_dir(), running: AtomicBool::new(false), failure: Mutex::new(None), failures: AtomicU32::new(0) };
-        assert!(engine.synthesize(SpeakRequest { text: "hello", voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default()).is_err());
+        let engine = MlxTts { worker: Mutex::new(None), voices: vec![], default_voice: "vivian".into(), binary: PathBuf::from("/nonexistent/voicekit-mlx-worker"), model: std::env::temp_dir(), running: AtomicBool::new(false), health: QwenHealth::default() };
+        let speak = |text| engine.synthesize(SpeakRequest { text, voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default());
+        assert!(speak("hello").is_err());
         assert!(engine.failure().is_some());
-        assert!(engine.synthesize(SpeakRequest { text: "again", voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default()).is_err());
-        assert_eq!(engine.failures.load(Ordering::SeqCst), 1, "requests must honor cooldown without another spawn attempt");
-        assert!(engine.synthesize(SpeakRequest { text: ")\"🙂", voice: "vivian", speed: 1.0, language: Some("en") }, &mut Timings::default()).unwrap().samples.is_empty());
-        engine.retry_failed(); assert_eq!(engine.failures.load(Ordering::SeqCst), 1);
-        engine.failure.lock().unwrap().as_mut().unwrap().1 = Instant::now() - Duration::from_secs(61);
-        engine.retry_failed(); assert_eq!(engine.failures.load(Ordering::SeqCst), 2);
-        engine.failure.lock().unwrap().as_mut().unwrap().1 = Instant::now() - Duration::from_secs(61);
-        engine.retry_failed(); assert_eq!(engine.failures.load(Ordering::SeqCst), 2, "second failure must wait longer");
+        assert_eq!(engine.health.failures(), 1);
+        // One failed start is not a cooldown: the next request tries again.
+        assert!(speak("again").is_err());
+        assert_eq!(engine.health.failures(), 2, "a single runtime failure must not block the next request");
+        // Two in a row are: requests wait instead of spawning again.
+        assert!(speak("third").unwrap_err().to_string().contains("cooling down"));
+        assert_eq!(engine.health.failures(), 2);
+        assert!(speak(")\"🙂").unwrap().samples.is_empty());
+        engine.health.backdate(Duration::from_secs(31));
+        engine.retry_failed(); assert_eq!(engine.health.failures(), 2, "nothing starts a worker in the background");
+        assert!(speak("fourth").is_err());
+        assert_eq!(engine.health.failures(), 3, "after the cooldown the next request tries again");
+        engine.health.backdate(Duration::from_secs(31));
+        assert!(speak("fifth").unwrap_err().to_string().contains("cooling down"), "the third failure waits longer (60 s)");
     }
 
 

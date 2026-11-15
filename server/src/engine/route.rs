@@ -40,8 +40,6 @@ struct RouteState {
     failures: AtomicU32,
 }
 
-/// After a failed lazy load, wait this long before trying again.
-const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 impl Route {
     pub fn lazy(load: LazyLoad, model: String, label: String, languages: Vec<String>, shared_voice: Option<String>, catalog_voices: Vec<Voice>) -> Self {
@@ -79,8 +77,7 @@ impl Route {
         let _loading = self.state.load.lock().unwrap();
         if self.loaded_engine().is_none() {
             let load = self.state.lazy.as_ref()?;
-            let delay = RETRY_AFTER * 2u32.pow(self.state.failures.load(Ordering::SeqCst).saturating_sub(1).min(5));
-            if self.state.failed_at.lock().unwrap().is_some_and(|at| at.elapsed() < delay) {
+            if self.retry_after().is_some() {
                 return None;
             }
             let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -115,9 +112,12 @@ impl Route {
     pub(crate) fn unrunnable(&self) -> Option<String> { self.unrunnable.as_ref().and_then(|f| f()) }
     /// Installed and able to run here; it may still be cooling down after a failure.
     pub(crate) fn usable(&self) -> bool { self.installed() && self.unrunnable().is_none() }
+    /// Seconds left of a cooldown after runtime failures (see `cooldown`), if one is running.
     pub(crate) fn retry_after(&self) -> Option<u64> {
-        let delay = RETRY_AFTER * 2u32.pow(self.state.failures.load(Ordering::SeqCst).saturating_sub(1).min(5));
-        self.state.failed_at.lock().unwrap().as_ref().map(|t| delay.saturating_sub(t.elapsed()).as_secs())
+        let delay = super::cooldown(self.state.failures.load(Ordering::SeqCst))?;
+        let at = (*self.state.failed_at.lock().unwrap())?;
+        let left = delay.saturating_sub(at.elapsed());
+        (!left.is_zero()).then(|| left.as_secs().max(1))
     }
 }
 
@@ -179,15 +179,18 @@ mod tests {
             Some(Ok(Arc::new(BrokenWorker)))
         }), "broken-mlx".into(), "fixture".into(), vec!["en".into()], None, vec![]);
         assert!(route.engine().is_none());
-        assert!(route.retry_after().is_some());
-        assert!(route.engine().is_none());
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-        *route.state.failed_at.lock().unwrap() = Some(Instant::now() - Duration::from_secs(61));
+        assert!(route.retry_after().is_none(), "one failed start is not a cooldown");
         assert!(route.engine().is_none());
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        assert_eq!(route.state.failures.load(Ordering::SeqCst), 2);
+        assert!(route.retry_after().is_some(), "two in a row are");
+        assert!(route.engine().is_none());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2, "no load attempt during the cooldown");
+        *route.state.failed_at.lock().unwrap() = Some(Instant::now() - Duration::from_secs(31));
+        assert!(route.engine().is_none());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(route.state.failures.load(Ordering::SeqCst), 3);
         assert!(route.loaded_engine().is_none());
-        assert!(route.retry_after().unwrap() > 60, "failed worker startup must retain increasing backoff");
+        assert!(route.retry_after().unwrap() > 30, "failed worker startup must retain increasing backoff");
     }
 
 }

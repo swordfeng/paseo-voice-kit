@@ -1,6 +1,6 @@
 //! Persistent GGUF subprocess; its GGML stays isolated from whisper.cpp.
 
-use super::{text_chunks, SpeakRequest, Timings, TtsEngine, Voice};
+use super::{qwen_speak_chunk, qwen_worker_error, text_chunks, QwenHealth, QwenSampling, SpeakRequest, Timings, TtsEngine, Voice};
 use crate::{audio::Pcm, catalog::ModelEntry};
 use anyhow::{ensure, Context};
 use serde_json::Value;
@@ -141,7 +141,7 @@ impl Worker {
             .recv_timeout(timeout)
             .context("GGUF worker response timed out or disconnected")??;
         if frame.header["event"] == "error" {
-            anyhow::bail!("GGUF synthesis failed: {}", frame.header["error"]);
+            return Err(qwen_worker_error(&frame.header, "GGUF"));
         }
         Ok(frame)
     }
@@ -160,6 +160,7 @@ impl Worker {
     fn speak(
         &mut self,
         req: SpeakRequest<'_>,
+        sampling: QwenSampling,
         timings: &mut Timings,
         deadline: Instant,
     ) -> anyhow::Result<Pcm> {
@@ -167,7 +168,7 @@ impl Worker {
         writeln!(
             input,
             "{}",
-            super::qwen_request(req.text, req.voice, Some(language(req.language)))?
+            super::qwen_request(req.text, req.voice, Some(language(req.language)), sampling)?
         )?;
         input.flush()?;
         let mut samples = Vec::new();
@@ -228,8 +229,7 @@ pub struct GgufTts {
     codec: PathBuf,
     use_gpu: bool,
     device: AtomicU32,
-    failure: Mutex<Option<(String, Instant)>>,
-    failures: AtomicU32,
+    health: QwenHealth,
 }
 impl GgufTts {
     pub fn load(entry: &ModelEntry, root: &Path, use_gpu: bool) -> anyhow::Result<Self> {
@@ -257,8 +257,8 @@ impl GgufTts {
                 featured: v.featured,
             })
             .collect();
-        // The containing route calls this only on first use. Loading here lets background
-        // recovery prove the worker is healthy before advertising it as available again.
+        // The containing route calls this only on first use, so a request is waiting: starting
+        // the worker here reports a broken installation as a load failure right away.
         let worker = Worker::spawn(&binary, &model, &codec, use_gpu)?;
         let device = worker.device;
         Ok(Self {
@@ -273,8 +273,7 @@ impl GgufTts {
             codec,
             use_gpu,
             device: AtomicU32::new(device),
-            failure: Mutex::new(None),
-            failures: AtomicU32::new(0),
+            health: QwenHealth::default(),
         })
     }
 }
@@ -305,17 +304,8 @@ impl TtsEngine for GgufTts {
         }
         let mut worker = self.worker.lock().unwrap_or_else(|p| p.into_inner());
         if worker.is_none() {
-            let delay = Duration::from_secs(60)
-                * 2u32.pow(
-                    self.failures
-                        .load(Ordering::SeqCst)
-                        .saturating_sub(1)
-                        .min(5),
-                );
-            if let Some((error, at)) = self.failure.lock().unwrap().as_ref() {
-                if at.elapsed() < delay {
-                    anyhow::bail!("GGUF worker retry is cooling down: {error}");
-                }
+            if let Some(error) = self.health.cooling() {
+                anyhow::bail!("GGUF worker retry is cooling down: {error}");
             }
         }
         let requested_voice = req.voice.to_ascii_lowercase();
@@ -341,13 +331,18 @@ impl TtsEngine for GgufTts {
             }
             let generation = worker.as_mut().context("Qwen worker stopped before text budgeting")?;
             let chunks = text_chunks(req.text, |text| generation.token_count(text, planning_deadline))?;
-            let deadline = started + Duration::from_secs((60 + chunks.len() as u64 * 5).min(180));
+            // Each chunk is bounded by its frame cap (and the GGUF worker's own 60 s), so the whole
+            // request gets that per chunk: accepted text never times out just for being long.
+            let deadline = started + Duration::from_secs(30 + chunks.len() as u64 * 60);
             let mut samples = Vec::new();
             for text in chunks {
                 if !text.chars().any(char::is_alphanumeric) {
                     continue;
                 }
-                let chunk = generation.speak(SpeakRequest { text, voice, ..req }, timings, deadline)?;
+                let tokens = generation.token_count(text, deadline)?;
+                let chunk = qwen_speak_chunk(tokens, |sampling| {
+                    generation.speak(SpeakRequest { text, voice, ..req }, sampling, timings, deadline)
+                })?;
                 ensure!(
                     samples.len() + chunk.samples.len() <= 24_000 * 600,
                     "speech exceeds ten-minute output limit"
@@ -360,14 +355,10 @@ impl TtsEngine for GgufTts {
                 sample_rate: 24_000,
             })
         })();
-        if let Err(error) = &result {
+        // A request failure leaves the worker serving; a crash, failed start or timeout drops it.
+        if self.health.record(&result) {
             self.device.store(0, Ordering::SeqCst);
             worker.take();
-            self.failures.fetch_add(1, Ordering::SeqCst);
-            *self.failure.lock().unwrap() = Some((format!("{error:#}"), Instant::now()));
-        } else {
-            self.failures.store(0, Ordering::SeqCst);
-            self.failure.lock().unwrap().take();
         }
         drop(worker);
         let pcm = result?;
@@ -380,43 +371,8 @@ impl TtsEngine for GgufTts {
         device_name(self.device.load(Ordering::SeqCst))
     }
     fn failure(&self) -> Option<String> {
-        self.failure
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(error, _)| error.clone())
+        self.health.failure()
     }
-    fn retry_failed(&self) {
-        let delay = Duration::from_secs(60)
-            * 2u32.pow(
-                self.failures
-                    .load(Ordering::SeqCst)
-                    .saturating_sub(1)
-                    .min(5),
-            );
-        if !self
-            .failure
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|(_, at)| at.elapsed() >= delay)
-        {
-            return;
-        }
-        let Ok(mut worker) = self.worker.try_lock() else {
-            return;
-        };
-        match Worker::spawn(&self.binary, &self.model, &self.codec, self.use_gpu) {
-            Ok(loaded) => {
-                self.device.store(loaded.device, Ordering::SeqCst);
-                *worker = Some(loaded);
-                self.failure.lock().unwrap().take();
-                self.failures.store(0, Ordering::SeqCst);
-            }
-            Err(error) => {
-                self.failures.fetch_add(1, Ordering::SeqCst);
-                *self.failure.lock().unwrap() = Some((format!("{error:#}"), Instant::now()));
-            }
-        }
-    }
+    // No background retry: a worker starts again only for a request (after any cooldown), so
+    // nothing allocates GPU memory while no one is waiting for speech.
 }

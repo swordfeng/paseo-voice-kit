@@ -8,7 +8,11 @@ use std::{
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path, Request, State},
+    extract::{
+        multipart::MultipartRejection,
+        rejection::JsonRejection,
+        DefaultBodyLimit, Multipart, Path, Request, State,
+    },
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -68,9 +72,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(authed)
+        // Before the layers, so unknown routes get the loopback check and error shape too.
+        .fallback(fallback)
         .layer(middleware::from_fn(loopback_host))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
-        .fallback(fallback)
         .with_state(state)
 }
 
@@ -133,7 +138,7 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
 
 async fn voices(State(state): State<Arc<AppState>>) -> Response {
     let runtime = state.runtime.clone();
-    match tokio::task::spawn_blocking(move || runtime.tts().map(|e| (e.voices(), e.routes()))).await {
+    match tokio::task::spawn_blocking(move || runtime.tts_voices()).await {
         Ok(Ok((voices, routes))) => Json(json!({ "voices": voices, "routes": routes, "default": state.runtime.settings.default_voice })).into_response(),
         Ok(Err(err)) => api_error(StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable", &format!("{err:#}")),
         Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", &err.to_string()),
@@ -145,12 +150,18 @@ struct PullBody {
     id: String,
 }
 
-async fn pull(State(state): State<Arc<AppState>>, Json(body): Json<PullBody>) -> Response {
+async fn pull(State(state): State<Arc<AppState>>, body: Result<Json<PullBody>, JsonRejection>) -> Response {
+    // Malformed requests get the same OpenAI error shape as every other error.
+    let body = match body {
+        Ok(Json(body)) => body,
+        Err(rejection) => return api_error(rejection.status(), "invalid_request", &rejection.body_text()),
+    };
     let Some(entry) = state.runtime.catalog.find(&body.id).cloned() else {
         return api_error(StatusCode::NOT_FOUND, "unknown_model", "Unknown model id");
     };
+    // A voice list's models that can't run here (e.g. MLX with CPU only) aren't fetched.
     let entries: Vec<_> = state.runtime.with_dependencies(&entry).into_iter()
-        .filter(|e| e.engine != crate::catalog::Engine::Chain).cloned().collect();
+        .filter(|e| e.engine != crate::catalog::Engine::Chain && state.runtime.unrunnable(e).is_none()).cloned().collect();
     if state.runtime.installed(&entry) && entries.iter().all(|e| state.runtime.store.locate(e).is_some()) {
         let runtime = state.runtime.clone();
         let id = entry.id.clone();
@@ -163,7 +174,8 @@ async fn pull(State(state): State<Arc<AppState>>, Json(body): Json<PullBody>) ->
     if entries.iter().any(|e| state.runtime.store.locate(e).is_none() && e.download.is_empty()) {
         return api_error(StatusCode::BAD_REQUEST, "not_downloadable", "This model has no download source");
     }
-    if state.runtime.downloads.is_active(&entry.id) {
+    let missing: Vec<_> = entries.iter().filter(|e| state.runtime.store.locate(e).is_none()).collect();
+    if state.runtime.downloads.is_active(&entry.id) || (!missing.is_empty() && missing.iter().all(|e| state.runtime.downloads.is_active(&e.id))) {
         return Json(json!({ "id": entry.id, "state": "downloading" })).into_response();
     }
     let runtime = state.runtime.clone();
@@ -192,6 +204,10 @@ async fn remove_model(State(state): State<Arc<AppState>>, Path(id): Path<String>
     if state.runtime.store.paseo_model(entry).is_some() {
         return api_error(StatusCode::CONFLICT, "paseo_model_manager", "Shared model removal uses Paseo's model manager");
     }
+    // A download still writing into the folder would recreate it.
+    if state.runtime.downloads.is_active(&entry.id) {
+        return api_error(StatusCode::CONFLICT, "download_in_progress", "The model is downloading; wait for it to finish or fail, then remove it");
+    }
     // Only ever delete our own downloads; Paseo's models and user paths are left alone.
     let target = state.runtime.store.own_dir(entry);
     if entry.path.is_some() || !target.starts_with(&state.runtime.store.models_dir) || !target.exists() {
@@ -200,13 +216,26 @@ async fn remove_model(State(state): State<Arc<AppState>>, Path(id): Path<String>
     match tokio::fs::remove_dir_all(&target).await {
         Ok(()) => {
             state.runtime.downloads.clear(&entry.id);
+            crate::download::clean_partials(&state.runtime.store.models_dir, &entry.id).await;
             Json(json!({ "id": entry.id, "removed": true })).into_response()
         }
         Err(err) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "remove_failed", &err.to_string()),
     }
 }
 
-async fn transcriptions(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+/// Audio that can't be decoded: the request's fault, not the engine's.
+#[derive(Debug)]
+struct BadAudio(String);
+impl std::fmt::Display for BadAudio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+impl std::error::Error for BadAudio {}
+
+async fn transcriptions(State(state): State<Arc<AppState>>, multipart: Result<Multipart, MultipartRejection>) -> Response {
+    let mut multipart = match multipart {
+        Ok(multipart) => multipart,
+        Err(rejection) => return api_error(rejection.status(), "invalid_request", &rejection.body_text()),
+    };
     let seq = state.next_seq();
     let started = Instant::now();
     let mut file: Option<(Option<String>, bytes::Bytes)> = None;
@@ -257,10 +286,13 @@ async fn transcriptions(State(state): State<Arc<AppState>>, mut multipart: Multi
     let model_for_task = model.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<(String, f32, Timings)> {
         let mut t = Timings::default();
-        let decoded = t.time("decode", || audio::decode_any(&bytes, ext.as_deref()))?;
+        let decoded = t.time("decode", || audio::decode_any(&bytes, ext.as_deref())).map_err(|e| BadAudio(format!("Could not decode the audio: {e:#}")))?;
         let pcm = t.time("resample", || decoded.resample(16_000));
         let secs = pcm.duration_secs();
         if pcm.peak() < SILENCE_PEAK {
+            // Silence needs no inference, but only a model that could answer may say so.
+            let ready = runtime.catalog.find(&model_for_task).is_some_and(|entry| runtime.installed(entry));
+            anyhow::ensure!(ready, "speech recognition model {model_for_task} is not installed");
             return Ok((String::new(), secs, t));
         }
         let text = runtime.with_stt(&model_for_task, &mut t, |engine, t| {
@@ -276,6 +308,7 @@ async fn transcriptions(State(state): State<Arc<AppState>>, mut multipart: Multi
 
     let (text, secs, timings) = match result {
         Ok(Ok(v)) => v,
+        Ok(Err(err)) if err.downcast_ref::<BadAudio>().is_some() => return api_error(StatusCode::BAD_REQUEST, "invalid_audio", &err.to_string()),
         Ok(Err(err)) => return api_error(StatusCode::SERVICE_UNAVAILABLE, "engine_error", &format!("{err:#}")),
         Err(err) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", &err.to_string()),
     };
@@ -300,6 +333,8 @@ struct SpeechBody {
     speed: Option<f32>,
     /// Extension: ISO 639-1 language of `input`. Optional; detected when absent.
     language: Option<String>,
+    /// Extension: read the whole input with this one model of the voice list (its preview).
+    voicekit_route: Option<String>,
 }
 
 /// OpenAI voice names do not exist in Kokoro; map them to the configured default voice.
@@ -316,7 +351,10 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
         return api_error(StatusCode::BAD_REQUEST, "invalid_request", "Input is empty");
     }
     if req.input.chars().count()>20_000 { return api_error(StatusCode::BAD_REQUEST,"input_too_long","Speech input exceeds 20000 characters"); }
-    let format = req.response_format.clone().unwrap_or_else(|| "mp3".into());
+    // OpenAI's default is mp3, which voicekit doesn't produce: say so instead of guessing.
+    let Some(format) = req.response_format.clone() else {
+        return api_error(StatusCode::BAD_REQUEST, "unsupported_response_format", "Set response_format to pcm or wav (mp3, the OpenAI default, isn't supported)");
+    };
     if !matches!(format.as_str(), "pcm" | "wav") {
         return api_error(StatusCode::BAD_REQUEST, "unsupported_response_format", "Use response_format pcm or wav");
     }
@@ -331,12 +369,20 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
     let runtime = state.runtime.clone();
     let input = req.input;
     let language = req.language.clone();
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<(f32, &'static str, Vec<u8>, Timings)> {
+    let route = req.voicekit_route.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<(f32, &'static str, Vec<u8>, Timings, Option<String>)> {
         let mut t = Timings::default();
+        let mut runs = None;
         let pcm = runtime.with_tts(&mut t, |engine, t| {
             let started = Instant::now();
-            let pcm = engine.synthesize(SpeakRequest { text: &input, voice: &voice, speed, language: language.as_deref() }, t);
+            let request = SpeakRequest { text: &input, voice: &voice, speed, language: language.as_deref() };
+            let pcm = match &route {
+                Some(model) => engine.synthesize_route(model, request, t),
+                None => engine.synthesize(request, t),
+            };
             t.push("inference", started.elapsed().as_secs_f64() * 1000.0);
+            // Read within the engine lock, so it belongs to this request. Only ids and codes.
+            runs = engine.last_runs().map(|r| r.to_string());
             pcm
         })?;
         // Outside the engine lock. OpenAI `pcm` is raw 24 kHz signed 16-bit little-endian mono.
@@ -350,10 +396,10 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
         let output_ms = started.elapsed().as_secs_f64() * 1000.0;
         t.push("output", output_ms);
         runtime.record_tts_stage("output", output_ms);
-        Ok((pcm.duration_secs(), content_type, bytes, t))
+        Ok((pcm.duration_secs(), content_type, bytes, t, runs))
     })
     .await;
-    let (audio_secs, content_type, bytes, timings) = match result {
+    let (audio_secs, content_type, bytes, timings, runs) = match result {
         Ok(Ok(out)) => out,
         Ok(Err(err)) => {
             if let Some(routing)=err.downcast_ref::<crate::engine::chain::RoutingError>() {
@@ -367,6 +413,10 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
     let stages = timings.summary();
     tracing::info!(seq, ms = total as u64, chars, audio_secs, stages = %stages, "synthesized");
     let mut response = Response::builder().header(header::CONTENT_TYPE, content_type).body(Body::from(bytes)).unwrap();
+    // Which model and voice read each part (for "Try a reply"); ASCII ids only.
+    if let Some(runs) = runs.filter(|r| r.is_ascii()).and_then(|r| header::HeaderValue::from_str(&r).ok()) {
+        response.headers_mut().insert("x-voicekit-runs", runs);
+    }
     add_timing_header(&mut response, total, &stages);
     response
 }

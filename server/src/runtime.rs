@@ -18,6 +18,23 @@ use crate::{
 /// Load a sherpa-onnx or remote voice model (anything but a chain).
 /// Why a voice model can never load with this build and settings, or None when it can.
 /// These are configuration facts, not failures: nothing here installs anything.
+/// Longest wait behind another request on the same model, and behind a model that is loading
+/// (a first Core ML compile can take minutes). A stuck request never holds up later ones forever.
+const QUEUE_WAIT: Duration = Duration::from_secs(180);
+const LOAD_WAIT: Duration = Duration::from_secs(600);
+
+fn lock_within<'a, T>(mutex: &'a Mutex<T>, limit: Duration, what: &str) -> anyhow::Result<std::sync::MutexGuard<'a, T>> {
+    let deadline = Instant::now() + limit;
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(std::sync::TryLockError::WouldBlock) => anyhow::bail!("{what} is still busy after {} s; try again", limit.as_secs()),
+        }
+    }
+}
+
 fn unrunnable_voice(entry: &ModelEntry, use_gpu: bool) -> Option<String> {
     match entry.engine {
         Engine::Mlx if !cfg!(all(target_os = "macos", target_arch = "aarch64")) => {
@@ -29,6 +46,37 @@ fn unrunnable_voice(entry: &ModelEntry, use_gpu: bool) -> Option<String> {
         }
         Engine::Gguf if engine::gguf::worker_path().is_none() => Some("The GGUF speech worker is missing from this installation".into()),
         _ => None,
+    }
+}
+
+/// Voices of models whose catalog doesn't list them (most custom models), remembered from their
+/// first load. The model's voices can then be chosen while it is unloaded and after the server
+/// restarts (any settings change restarts it), without loading it again just to list them.
+fn voice_cache(store: &Store) -> std::path::PathBuf {
+    store.models_dir.join(".voices.json")
+}
+
+static VOICE_CACHE_LOCK: Mutex<()> = Mutex::new(());
+
+fn read_voice_cache(store: &Store) -> std::collections::BTreeMap<String, Vec<engine::Voice>> {
+    std::fs::read(voice_cache(store)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+fn cached_voices(store: &Store, id: &str) -> Vec<engine::Voice> {
+    read_voice_cache(store).remove(id).unwrap_or_default()
+}
+
+fn remember_voices(store: &Store, id: &str, voices: Vec<engine::Voice>) {
+    let _guard = VOICE_CACHE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut cache = read_voice_cache(store);
+    if voices.is_empty() || cache.get(id) == Some(&voices) {
+        return;
+    }
+    cache.insert(id.to_string(), voices);
+    let tmp = voice_cache(store).with_extension("json.tmp");
+    let written = serde_json::to_vec(&cache).map_err(anyhow::Error::from).and_then(|bytes| Ok(std::fs::write(&tmp, bytes)?)).and_then(|_| Ok(std::fs::rename(&tmp, voice_cache(store))?));
+    if let Err(error) = written {
+        tracing::warn!(model = id, error = %format!("{error:#}"), "could not remember the model's voices");
     }
 }
 
@@ -133,7 +181,7 @@ impl<T: ?Sized> Slot<T> {
         if let Some(ready) = self.current() {
             return ready;
         }
-        let _loading = self.load.lock().unwrap();
+        let _loading = lock_within(&self.load, LOAD_WAIT, "the model's loading")?;
         // Another caller may have finished loading while we waited.
         if let Some(ready) = self.current() {
             return ready;
@@ -403,9 +451,13 @@ impl Runtime {
             for id in entry.chain_models() {
                 let model = self.entry(&id, Kind::Tts)?;
                 anyhow::ensure!(model.engine != Engine::Chain, "a voice chain cannot contain another chain");
-                let voices = model.voices.iter().map(|v| engine::Voice {
+                let mut voices: Vec<engine::Voice> = model.voices.iter().map(|v| engine::Voice {
                     id: v.id.clone(), label: v.label.clone(), language: v.language.clone(), gender: v.gender.clone(), featured: v.featured,
                 }).collect();
+                // Voices the catalog doesn't list are known once the model has loaded.
+                if voices.is_empty() {
+                    voices = cached_voices(&self.store, &model.id);
+                }
                 let route = route::Route::lazy(self.lazy_route(model), model.id.clone(), model.label.clone(), model.languages.clone(), None, voices);
                 let (store, child) = (self.store.clone(), model.clone());
                 let (check_child, use_gpu) = (model.clone(), self.use_gpu());
@@ -436,7 +488,7 @@ impl Runtime {
                 return None;
             }
             if store.locate(&entry).is_none() {
-                if auto_pull && store.paseo_model(&entry).is_none() && !downloads.is_active(&entry.id) && downloads.error(&entry.id).is_none() {
+                if auto_pull && store.paseo_model(&entry).is_none() && downloads.may_start(&entry.id) {
                     tracing::info!(model = entry.id, "downloading an enabled voice model on first use");
                     let (downloads, store, entry) = (downloads.clone(), store.clone(), entry.clone());
                     handle.spawn(async move {
@@ -447,7 +499,11 @@ impl Runtime {
                 }
                 return None;
             }
-            Some(load_leaf_tts(&entry, &store, &provider, threads, &voice, &handle, use_gpu))
+            let loaded = load_leaf_tts(&entry, &store, &provider, threads, &voice, &handle, use_gpu);
+            if let (Ok(engine), true) = (&loaded, entry.voices.is_empty()) {
+                remember_voices(&store, &entry.id, engine.voices());
+            }
+            Some(loaded)
         })
     }
 
@@ -550,6 +606,20 @@ impl Runtime {
         Ok(engine)
     }
 
+    /// Voices to list without loading a model only for that: a loaded engine's own, a voice list's
+    /// (its models load lazily, so this is cheap), otherwise the catalog's.
+    pub fn tts_voices(&self) -> anyhow::Result<(Vec<engine::Voice>, Vec<route::RouteVoices>)> {
+        let loaded = matches!(self.tts.current(), Some(Ok(_)));
+        let entry = self.catalog.find(&self.settings.tts_model);
+        if self.settings.stub || loaded || entry.is_none_or(|e| e.engine == Engine::Chain) {
+            let engine = self.tts()?;
+            return Ok((engine.voices(), engine.routes()));
+        }
+        let entry = entry.expect("checked above");
+        let voices = entry.voices.iter().map(|v| engine::Voice { id: v.id.clone(), label: v.label.clone(), language: v.language.clone(), gender: v.gender.clone(), featured: v.featured }).collect();
+        Ok((voices, vec![]))
+    }
+
     /// Reload an active model after an optional encoder download; never wake an unused model.
     pub fn reload_stt(&self, model: &str) {
         let Some(slot) = self.stt.get(model) else { return };
@@ -576,7 +646,7 @@ impl Runtime {
         let Some(slot) = self.stt.get(model) else {
             return f(engine.as_ref(), timings);
         };
-        let _guard = timings.time("queue", || slot.run.lock().unwrap());
+        let _guard = timings.time("queue", || lock_within(&slot.run, QUEUE_WAIT, "this speech recognition model"))?;
         let started = Instant::now();
         let out = f(engine.as_ref(), timings);
         slot.record(started.elapsed().as_millis() as u64);
@@ -598,7 +668,7 @@ impl Runtime {
         f: impl FnOnce(&dyn TtsEngine, &mut crate::engine::Timings) -> anyhow::Result<R>,
     ) -> anyhow::Result<R> {
         let engine = timings.time("load", || self.tts())?;
-        let _guard = timings.time("queue", || self.tts.run.lock().unwrap());
+        let _guard = timings.time("queue", || lock_within(&self.tts.run, QUEUE_WAIT, "speech synthesis"))?;
         let started = Instant::now();
         let out = f(engine.as_ref(), timings);
         self.tts.record(started.elapsed().as_millis() as u64);
@@ -845,6 +915,23 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voices_seen_at_load_are_remembered_per_model() {
+        let root = std::env::temp_dir().join(format!("vk-voice-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store { models_dir: root.clone(), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false };
+        let voice = |id: &str| engine::Voice { id: id.into(), label: id.into(), language: "zh".into(), gender: "female".into(), featured: false };
+        assert!(cached_voices(&store, "custom-a").is_empty());
+        remember_voices(&store, "custom-a", vec![voice("zh-f01"), voice("zh-f02")]);
+        remember_voices(&store, "custom-b", vec![voice("speaker-0")]);
+        remember_voices(&store, "custom-a", vec![]);
+        assert_eq!(cached_voices(&store, "custom-a").len(), 2, "an empty list never replaces what was seen");
+        assert_eq!(cached_voices(&store, "custom-b")[0].id, "speaker-0");
+        std::fs::write(voice_cache(&store), "not json").unwrap();
+        assert!(cached_voices(&store, "custom-a").is_empty(), "a damaged cache only means loading once more");
+        std::fs::remove_dir_all(root).ok();
+    }
 
     #[test]
     fn failed_or_panicking_loader_can_recover_without_poisoning_the_slot() {
