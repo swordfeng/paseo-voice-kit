@@ -118,7 +118,7 @@ a model. The pinned library is patched to construct tokenizers in memory and nev
 write or remove model folders. MLX models are added from Hugging Face or a local
 folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
 9 preset voices are supported; Base and VoiceDesign models aren't.
-The Swift worker seeds each generation with 42; process reuse, bounded requests,
+The Swift worker uses temperature 0.6 and seeds each generation with 42; process reuse, bounded requests,
 worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
 and existing model selections are unchanged by the backend migration.
 Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech

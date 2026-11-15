@@ -695,3 +695,17 @@ The live plugin reported running, all three speech sites active, and the native
 MLX helper ready. Installed-binary MLX HTTP checks and live preview/Whisper Metal
 recognition passed. Plugin preferences were unchanged. A final plugin reload left
 all configured models unloaded. No Paseo daemon restart, push or release occurred.
+
+### MLX sampling adjustment (2026-11-15)
+
+MLX initially retained temperature 0.9 while GGUF's main sampler used 0.7; both
+used seed 42. After a report of added laughter/playful delivery, short MLX tests
+compared temperature 0.7 and the user-approved fallback 0.6, keeping seed 42.
+Both passed native Metal synthesis, repeat-identical audio, tempo and read-only
+model checks. English read-back matched. Chinese read-back at 0.7 added a final
+“啊”; at 0.6 it rendered “您好” rather than the input “你好”. These differences
+do not distinguish synthesis errors from ASR errors, nor assess laughter.
+The deployed MLX default is now 0.6/42 for audition; GGUF main sampling remains
+0.7/42. Listening is required to judge whether expressiveness has improved.
+The native helper was replaced with rollback retained and only the plugin was
+reloaded. Existing plugin preferences were unchanged.

@@ -94,8 +94,8 @@ func profile(_ event: String, _ fields: [String: Any] = [:]) {
                         var count = 0
                         var ended = false
                         var tokens = 0
-                        // Match the Python worker's sampling defaults; do not claim seed parity.
-                        let parameters = GenerateParameters(maxTokens: 1200, temperature: 0.9, topP: 1, topK: 50, repetitionPenalty: 1.05)
+                        // Reduce sampling variation for ordinary spoken replies.
+                        let parameters = GenerateParameters(maxTokens: 1200, temperature: 0.6, topP: 1, topK: 50, repetitionPenalty: 1.05)
                         let seed = UInt64(ProcessInfo.processInfo.environment["VOICEKIT_MLX_SEED"] ?? "42") ?? 42
                         MLXRandom.seed(seed)
                         for try await event in model.generateStream(text: request.text, voice: voice,
