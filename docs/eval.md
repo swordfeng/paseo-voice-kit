@@ -854,3 +854,107 @@ The rebuilt server was deployed with rollback retained, then only Voice Kit was
 reloaded. All speech sites became active and preferences matched the pre-deploy
 snapshot. A live preview containing Chinese quotes and decimal 0.2 successfully
 synthesized through MLX Metal; no broad model evaluation was repeated.
+
+### Qwen3-TTS and Supertonic voice similarity (2026-11-15)
+
+The persona table paired each Qwen3-TTS voice with a Supertonic voice by gender and voice
+description only. This spot check measures those pairs with the current Qwen settings
+(temperature 0.2, default calm instruction), using the deployed 0.1.1 server built at
+02:32 from `c551ecb`.
+
+- Samples: one English sentence for every voice of both models ("The weather is lovely
+  today, so let's take a short walk by the river after lunch."), plus one two-sentence
+  Chinese passage for Qwen3-TTS. Qwen3-TTS 0.6B GGUF Q4 ran on Metal (`Talker backend:
+  MTL0`; status `metal`) and Supertonic 3 on the CPU. Rendering all 28 samples took 51 s.
+  1.7B was not measured.
+- Score: the same method as the earlier Supertonic–Kokoro pairing. Mean CAM++
+  (`campplus_zh_en.onnx`, `server/examples/voice_embed.rs`) cosine similarity of the
+  Supertonic English sample with the Qwen English and Chinese samples, minus
+  0.02 × the median-pitch difference in semitones.
+
+| Qwen voice | Current pair | Best Supertonic (score) | Current pair's score and rank |
+|---|---|---|---|
+| vivian | F1 | F1 (0.376) | 0.376, 1st of 5 |
+| serena | F3 | F1 (0.305), then F5 (0.212) | 0.146, 4th of 5 |
+| sohee | F5 | F1 (0.332), then F2 (0.196) | 0.138, 3rd of 5 |
+| aiden | M1 | M4 (0.091) | −0.019, 3rd of 5 |
+| ryan | M4 | M4 (0.082) | 0.082, 1st of 5 |
+| uncle_fu | M2 | M1 (0.156) | −0.066, 4th of 5 |
+
+- Supertonic F1 is the closest voice for every female Qwen voice, so F1 is generally the
+  most Qwen-like voice rather than a specific match. Each voice used once, the best female
+  assignment is vivian–F1, serena–F5, sohee–F2 (total 0.784, current 0.660). The best male
+  assignment is uncle_fu–M1, aiden–M4, ryan–M3 (0.274, current −0.003).
+- The matches are weak. Cross-model similarities are 0.1–0.38, lower than the
+  Supertonic–Kokoro pairs (0.16–0.43). Serena's own English and Chinese samples are no
+  closer to each other (0.312) than to another voice (0.314), so its result is the least
+  reliable. Ono Anna behaves the same way.
+- Median pitch is far apart. Female Qwen voices measured 222–229 Hz in English, against
+  165–190 Hz for Supertonic. Male Qwen voices measured 169–205 Hz, against 87–118 Hz. The
+  male figures are high for male voices, and the estimator may have picked a harmonic, so
+  listen before relying on them.
+- The default pairing (Mia: Supertonic F1, Qwen vivian) is the best measured pair from both
+  sides.
+
+Samples, embeddings and scores: `/tmp/vk-match-20261115/` (not kept in the repository).
+
+#### Serena follow-up with more sentences (2026-11-15)
+
+The single-sentence result for serena was unreliable, so serena was measured again with
+five sentences (three English, two Japanese; both models speak them). Each sample was
+compared with the same sentence from Supertonic F1–F5. The model and scoring are the same
+as above (0.6B GGUF Q4 on Metal). Median pitch was checked with a second estimator (YIN)
+next to the autocorrelation one.
+
+| Supertonic | Same-sentence similarity, mean ± sd | Centroid similarity | Pitch difference (semitones, YIN) | Score |
+|---|---|---|---|---|
+| F1 | 0.491 ± 0.088 | 0.563 | 4.7 | 0.398 |
+| F5 | 0.316 ± 0.075 | 0.381 | 6.8 | 0.179 |
+| F2 | 0.219 ± 0.066 | 0.249 | 3.5 | 0.148 |
+| F4 | 0.212 ± 0.069 | 0.254 | 4.1 | 0.129 |
+| F3 | 0.214 ± 0.066 | 0.241 | 5.9 | 0.095 |
+
+- F1 was the closest for all five sentences. Its centroid similarity to serena (0.563) is
+  close to serena's own similarity across sentences (mean 0.586). F3, the current persona
+  pair, scored lowest.
+- Both pitch estimators agree: serena 233/242 Hz, F1 181/185 Hz, so the pitch gap is real
+  and not a harmonic error.
+- Two runs hit the generation cap on Metal (0.6B Q4, temperature 0.2, seed 42): sohee on
+  "I checked the build logs this morning, and everything passed except one small test.",
+  twice, and serena on "Honestly, I think the second option is better, but let's hear what
+  everyone else says." Each produced 2 304 000 samples (1200 frames, 96 s) and was rejected
+  as "empty or token-limited audio". The worker's cooldown then failed the remaining
+  requests on that server. Those samples were rendered with a fresh server per voice.
+
+### Qwen generations that never end: temperature and seed (2026-11-15)
+
+Some Qwen3-TTS generations never produce the end token and run to the 1200-frame cap (96 s
+of audio, about 35 s on Metal). They were rejected as "empty or token-limited audio", and the
+cooldown that followed failed every later request on that server. All runs used the default calm
+instruction, Metal, and the six sentences of the serena follow-up above (four English, two
+Japanese). There was one server per voice, so one failure didn't hide the next. The voices were
+vivian, serena, ono_anna, sohee, aiden, ryan and uncle_fu (the dialect voices weren't tested),
+giving 42 generations per row. Temperature and seed came from diagnostic overrides
+(`VOICEKIT_QWEN_TEMPERATURE`, `VOICEKIT_QWEN_SEED`).
+
+| Model | Temperature | Seed | Generations that hit the cap |
+|---|---|---|---|
+| 0.6B GGUF Q4 | 0.2 | 42 | serena, sohee, aiden (3 of 7 voices; later requests on those servers failed in the cooldown) |
+| 0.6B GGUF Q4 | 0.4 | 42 | 0 of 42 (0 of 24 again with the frame cap below) |
+| 1.7B GGUF Q8 | 0.4 | 42 | 2 of 42 |
+| 1.7B GGUF Q8 | 0.4 | 7 | 0 of 42 |
+| 1.7B GGUF Q8 | 0.5 | 42 | 1 of 42 |
+| 1.7B GGUF Q8 | 0.5 | 7 | 0 of 42 |
+| 1.7B GGUF Q8 | 0.7 | 42 | 1 of 42 |
+| 0.6B MLX 4-bit | 0.4 | 42 | 0 of 24 (vivian, serena, sohee, aiden) |
+
+- Without the instruction, at 0.2, serena's failure went away but sohee's didn't, so the
+  instruction contributes but isn't the cause.
+- Failures with seed 42 repeat exactly. The three 1.7B cases, each at its own temperature, were
+  retried with seeds 7, 43, 1234 and 2026. 11 of 12 retries finished; seed 2026 failed sohee's
+  en3 at 0.5. A second seed recovered every case in this sample, but it isn't guaranteed.
+- Above 0.2 the cap is rare but not gone on 1.7B (1–2 of 42 per seed). The difference between
+  0.4 and 0.5 is one generation, too small to rank them.
+- With a cap set from each chunk's token count (0.8 s per token plus 4 s, at most 1200 frames),
+  a forced 0.2 failure on 0.6B GGUF stopped at 403 200 samples (16.8 s of audio) instead of
+  2 304 000. The next request on the same server succeeded, with no cooldown refusal.

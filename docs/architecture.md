@@ -118,10 +118,14 @@ a model. The pinned library is patched to construct tokenizers in memory and nev
 write or remove model folders. MLX models are added from Hugging Face or a local
 folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
 9 preset voices are supported; Base and VoiceDesign models aren't.
-The speech server sends both Qwen workers the same temperature (0.2) and seed (42)
+The speech server sends both Qwen workers the same temperature (0.4) and seed (42)
 through private IPC, from one shared policy in `engine/qwen.rs`. Both main and
-acoustic talkers use that temperature. Process reuse, bounded requests,
-worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
+acoustic talkers use that temperature. Each chunk also gets a frame cap from its token
+count (0.8 s per token plus 4 s, at most 1200 frames). A generation that reaches it fails
+with `token_limit` and is retried once with seed 7 at the same temperature (eval.md has
+the measurements). Errors a worker reports for one request leave it running; a crash, a
+failed start or a timeout drops it, and only two in a row start a cooldown. Process reuse,
+bounded requests, worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
 and existing model selections are unchanged by the backend migration.
 Both workers default to the same auditioned Chinese instruction for calm, natural,
 steady delivery without laughter or added vocalizations. The optional
@@ -163,12 +167,13 @@ shorter natural edges and internal pauses are untouched. Activity uses sustained
 10 ms RMS windows with a relative threshold for quiet voices, capped at 32 PCM16
 units. Silent or uncertain clips are left unchanged; it does not load another model.
 
-Personas (`options.personas` of the chain) pair similar voices across the enabled models.
-Supertonic's voices were chosen by speaker-embedding similarity (3D-Speaker CAM++,
-`server/examples/voice_embed.rs`) and pitch, over samples from `scripts/voice-samples.sh`.
-Each persona's Qwen3-TTS voice was chosen by gender and voice description, not measured.
-Qwen3-TTS's two dialect voices (Beijing, Sichuan) are not used by any persona. The voice
-`custom` uses the voice chosen for each model (`modelVoices`).
+Each enabled model reads with its own voice (`modelVoices` in the plugin settings, sent as the
+chain's `options.model_voices`); the voice in a request, and the one Paseo stores, are ignored.
+There are no personas across models. The defaults are Supertonic F1 and Qwen3-TTS serena:
+serena's closest Supertonic voice by speaker-embedding similarity (3D-Speaker CAM++,
+`server/examples/voice_embed.rs`) and pitch (see eval.md). A speech request may name one model
+of the list (`voicekit_route`) to preview it with a given voice, and every chain response
+reports which model, voice and language read each part (`x-voicekit-runs`).
 
 ## UI language
 
@@ -198,8 +203,9 @@ model loads it again.
 - Every endpoint except `/health` (which only reports up or down) needs a bearer token,
   compared in constant time. The plugin creates a new token each time it starts the server
   and passes it in the environment, not on the command line.
-- Paseo's `config.json` and the plugin's state and custom-model files are written
-  owner-only (`0600`). Anything running as your user can read them; a local server can't
+- Paseo's `config.json` and the plugin's state, custom-model and remote-key
+  (`model-keys.json`) files are written owner-only (`0600`). Remote API keys are kept only in
+  `model-keys.json`; plugin settings, which Paseo apps can read, record only `hasApiKey`. Anything running as your user can read them; a local server can't
   protect against that.
 - Downloads use HTTPS with pinned SHA-256 for every built-in model and for release
   binaries.

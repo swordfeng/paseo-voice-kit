@@ -22,9 +22,9 @@ If Voice Kit isn't ready, Paseo uses its built-in speech instead.
   they download only after you enable them. Text in a language none of your enabled
   models speaks isn't read with the wrong pronunciation: the whole reply is refused and
   the page says which model could speak it. Catalan, Tagalog, Swahili and Malay can be
-  read approximately with a related language's pronunciation if you allow it. Pick one
-  of six voices (Mia, Lena, Nora, Leo, Kai, Owen); each pairs a similar voice in every
-  model, or choose voices per model yourself.
+  read approximately with a related language's pronunciation if you allow it. Each voice
+  model has its own voice, chosen and previewed on its card. By default Supertonic 3 uses F1
+  and Qwen3-TTS uses serena, the closest measured pair, so mixed-language replies sound alike.
 - **Other models.** Parakeet v3 (European languages), Dolphin small (Asian and
   Middle Eastern languages), SenseVoice and Whisper small.
   You can also add your own models from Hugging Face, a Whisper or sherpa-onnx
@@ -48,10 +48,13 @@ Plugin source. Voice Kit isn't in the Paseo plugin registry or on npm.
 The speech server (`voicekit`) is a separate native program. Prebuilt servers for macOS
 (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the
 [v0.1.0 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0). The
-first time Voice Kit starts, it asks before downloading the one for your platform and
-shows where it comes from. The download is checked against a SHA-256 pinned in the plugin,
-then unpacked into `~/.paseo/plugin-data/voice-kit/bin/`. If you decline, Voice Kit turns
-off and Paseo keeps its built-in speech.
+first time Voice Kit needs a server version, it asks before downloading the one for your
+platform and shows where it comes from; a plugin update that needs a new server version asks
+again. The download is checked against a SHA-256 pinned in the plugin, then unpacked into
+`~/.paseo/plugin-data/voice-kit/bin/`. If you decline, Voice Kit turns off and Paseo keeps its
+built-in speech. Voice Kit only runs the server version it was written for: a local build or a
+Binary path server of another version isn't started, and the status says which version is
+needed.
 
 Speech models are separate downloads of about 100 MB to 2 GB each, checked against pinned
 checksums. They download when you choose a model, unless you turn off "Download models
@@ -165,8 +168,8 @@ are never deleted.
 - The server listens on 127.0.0.1 only, rejects requests not addressed to a loopback
   host, and requires a token that changes every time it starts.
 - Built-in model downloads are checked against pinned SHA-256 checksums.
-- API keys for remote servers are stored in owner-only plain files on the daemon
-  and are included in plugin settings sent to connected Paseo clients.
+- API keys for remote servers are stored on the daemon in an owner-only file. Like Paseo's own
+  speech settings, they can be entered or replaced but are never sent back to Paseo apps.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
 
