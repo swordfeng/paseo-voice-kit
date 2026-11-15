@@ -214,7 +214,8 @@ function ModelCard(props: ModelManagerProps & { model: Model; custom?: CustomMod
         ))}
         {license ? (
           <ExternalLink href={license.url} accessibilityLabel={t("models.licenseLink", { name: license.name, model: modelLabel(t, m) })}>
-            <Chip theme={theme}>{t("models.license", { name: license.name }) + " ↗"}</Chip>
+            {/* ExternalLink adds its own arrow icon. */}
+            <Chip theme={theme}>{t("models.license", { name: license.name })}</Chip>
           </ExternalLink>
         ) : null}
         {m.installed && !remote ? (
