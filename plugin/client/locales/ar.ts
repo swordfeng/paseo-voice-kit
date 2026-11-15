@@ -138,6 +138,7 @@ export const ar: Messages = {
     tryReplyHint: "يقرأ نصك بنماذج الصوت لديك كما يُقرأ الرد.",
     tryReplyPlaceholder: "اتركه فارغًا لقراءة جملة مثال",
     readBy: "قرأه: {{list}}.",
+    readAs: "(بنطق {{language}})",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

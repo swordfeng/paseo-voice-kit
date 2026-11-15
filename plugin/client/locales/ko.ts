@@ -137,6 +137,7 @@ export const ko: Messages = {
     tryReplyHint: "답장을 읽을 때처럼 음성 모델로 이 텍스트를 읽습니다.",
     tryReplyPlaceholder: "비워 두면 예문을 읽습니다",
     readBy: "읽은 모델: {{list}}.",
+    readAs: "({{language}} 발음)",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

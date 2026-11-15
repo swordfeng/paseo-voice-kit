@@ -321,7 +321,8 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   /** "Supertonic 3 · F1": which model and voice read a part of a reply. */
   const spokenBy = (run: SpokenRun): string => {
     const voice = routes.find((r) => r.model === run.model)?.voices.find((v) => v.id === run.voice);
-    return labelOf(run.model) + (run.voice ? " · " + (voice ? voiceLabel(t, locale, voice) : run.voice) : "");
+    const approximate = run.read_as && run.language && run.read_as !== run.language ? " " + t("speaking.readAs", { language: languageName(run.read_as, locale) }) : "";
+    return labelOf(run.model) + (run.voice ? " · " + (voice ? voiceLabel(t, locale, voice) : run.voice) : "") + approximate;
   };
   // A model's preview line: the speech Language setting when the model speaks it, else its first language.
   const previewLine = (m: Model): string => {

@@ -137,6 +137,7 @@ export const es: Messages = {
     tryReplyHint: "Lee tu texto con tus modelos de voz, como se lee una respuesta.",
     tryReplyPlaceholder: "Déjalo vacío para una frase de ejemplo",
     readBy: "Leído por {{list}}.",
+    readAs: "(leído como {{language}})",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

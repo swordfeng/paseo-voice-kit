@@ -137,6 +137,7 @@ export const ptBR: Messages = {
     tryReplyHint: "Lê seu texto com seus modelos de voz, como uma resposta é lida.",
     tryReplyPlaceholder: "Deixe vazio para uma frase de exemplo",
     readBy: "Lido por {{list}}.",
+    readAs: "(lido como {{language}})",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

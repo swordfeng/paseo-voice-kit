@@ -304,7 +304,13 @@ export const voicesRpc = defineRpc({
   output: z.object({ voices: z.array(VoiceSchema), routes: z.array(RouteVoicesSchema).default([]) }),
 });
 /** Which model and voice read one part of a reply, and in which language. */
-export const SpokenRunSchema = z.object({ model: z.string(), voice: z.string(), language: z.string().nullable().default(null) });
+export const SpokenRunSchema = z.object({
+  model: z.string(),
+  voice: z.string(),
+  language: z.string().nullable().default(null),
+  /** The pronunciation used, when it isn't `language`'s (an allowed approximate reading). */
+  read_as: z.string().nullable().default(null),
+});
 export type SpokenRun = z.infer<typeof SpokenRunSchema>;
 
 /** Speak text: through the whole voice list, or (with `model`) with that one model and `voice`. */

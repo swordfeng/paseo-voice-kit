@@ -137,6 +137,7 @@ export const zhCN: Messages = {
     tryReplyHint: "用你的朗读模型读这段文字，和读回复时一样。",
     tryReplyPlaceholder: "留空则读一句示例",
     readBy: "朗读：{{list}}。",
+    readAs: "（按{{language}}发音）",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

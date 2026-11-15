@@ -578,6 +578,28 @@ step, and confirm GPU use wherever acceleration is expected.
     fast enough. Otherwise its default listening model needs the same GPU probe as Linux
     and Windows.
 
+### Results on the Mac (Apple Silicon, 2026-11-15)
+
+Run on the maintainer's Mac with the local 0.1.1 build at `71aebbd` plus the run-report change.
+The live installation was used only for steps 4 and 5, after backing up `config.json`, `state.json`
+and the plugin settings; the other steps used an isolated server (own port, token and catalog,
+the installed models read in place).
+
+| Step | Result |
+| --- | --- |
+| 1 Automated | Pass: 72 Rust tests, 138 plugin checks, typecheck, Python unit tests, `test-http-api.py`, `test-http-recovery.py`, the npm artifact check and the darwin-arm64 archive check (2028 files, `voicekit 0.1.1`). CI on the other platforms not run. |
+| 2 Clean install | Not run: the pinned release is still 0.1.0, which INST-7 refuses, so a clean install has to wait for the 0.1.1 release (INST-7a). The approval and download path is covered by `T:supervisor`. Dictation (`e2e-dictation.mjs`) and the voice-mode round trip (`e2e-voice.mjs`: "Round trip successful.") pass on the installed build. |
+| 3 Reinstall over 0.1.1 | Pass: redeployed several times; settings, models, the custom Kokoro and MLX models and the remembered voices survived. |
+| 4 Settings ownership | Pass: off restores all three Paseo settings exactly as saved before the takeover; on takes them over again and keeps the saved originals. Environment locks and Settings > Voice edits by `T:speech-switch`; removing the plugin not run (it deletes the plugin's settings). |
+| 5 Failures | Pass: `kill -9` of the server was noticed, the server restarted and every feature was active again in 1.4 s, then speech worked. Busy port, missed health checks, stalled and interrupted downloads by automated tests; offline start and low disk space not run. |
+| 6 Shared models | Pass (read-only): SenseVoice shows installed and Parakeet v3 not, matching Paseo's folder, with no private duplicate. Installing and removing them not run, since removal deletes Paseo's own copy; covered by `T:paseo-models`. |
+| 7 Custom models | Partly: the custom Kokoro (sherpa-onnx) and MLX Qwen3-TTS models work; refusals by `T:hf-lookup`, remote servers by `N:engine::remote` and `N:runtime`. No new model of each source type was added by hand. |
+| 8 Speaking | Pass: a mixed English and Chinese reply used Supertonic then Qwen; Thai was refused; Catalan was read as Spanish (reported `read_as`); speeds 0.5, 1 and 2 changed the length; a 13-sentence reply completed; Qwen's worker ended after a minute idle and the next request loaded it again. |
+| 9 MLX | Pass: the custom MLX CustomVoice model read on Metal with the bundled helper (no Python), and unloading ended the worker. |
+| STT-6, STT-7, ACC-1, ACC-2 | Pass: Whisper transcribed the Chinese part of a mixed clip; the vocabulary changes Whisper's output (see eval.md); Whisper reports `metal` and Supertonic `cpu`. |
+| 10 Windows and Linux | Next: on the Windows PC; Linux has no test machine yet. |
+| 11 Intel Mac | Not run: no Intel Mac available. |
+
 ### Rules without an automated test
 
 Every rule has an automated test or a manual check on this list (`M`) as of 2026-11-15.

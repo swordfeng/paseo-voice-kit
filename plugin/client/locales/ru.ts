@@ -138,6 +138,7 @@ export const ru: Messages = {
     tryReplyHint: "Читает ваш текст вашими голосовыми моделями так же, как читается ответ.",
     tryReplyPlaceholder: "Оставьте пустым, чтобы прочитать пример",
     readBy: "Читали: {{list}}.",
+    readAs: "(с произношением: {{language}})",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

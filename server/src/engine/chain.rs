@@ -268,6 +268,8 @@ mod tests {
         let (chain, calls) = approximating(&[("es-voice", &["es"], false)]);
         speak_as(&chain, "123.", "ca").unwrap();
         assert_eq!(*calls.lock().unwrap(), ["es-voice:es"]);
+        let runs = chain.last_runs().unwrap();
+        assert_eq!((runs[0]["language"].as_str(), runs[0]["read_as"].as_str()), (Some("ca"), Some("es")), "the report says it was read as Spanish");
         // When the native voice fails, the approximation is the fallback, after it.
         let (chain, calls) = approximating(&[("es-voice", &["es"], false), ("ca-voice", &["ca"], true)]);
         speak_as(&chain, "123.", "ca").unwrap();
@@ -403,9 +405,10 @@ impl TtsEngine for ChainTts {
         let language = req.language.map(str::to_string)
             .or_else(|| lang::runs(req.text).into_iter().find_map(|r| r.lang.map(str::to_string)))
             .or_else(|| latin_letters_only(req.text).then(|| "en".to_string()));
-        let pcm = engine.synthesize(SpeakRequest { text: req.text, voice: &voice, language: language.as_deref().and_then(|l| self.language(route, l)), speed: req.speed }, timings)?;
+        let read_as = language.as_deref().and_then(|l| self.language(route, l));
+        let pcm = engine.synthesize(SpeakRequest { text: req.text, voice: &voice, language: read_as, speed: req.speed }, timings)?;
         route.succeeded();
-        *self.last_runs.lock().unwrap() = vec![json!({"model": route.model, "voice": voice, "language": language})];
+        *self.last_runs.lock().unwrap() = vec![json!({"model": route.model, "voice": voice, "language": language, "read_as": read_as})];
         Ok(pcm)
     }
     fn last_runs(&self) -> Option<Value> {
@@ -474,7 +477,8 @@ impl TtsEngine for ChainTts {
                 ) {
                     Ok(pcm) => {
                         route.succeeded();
-                        self.last_runs.lock().unwrap().push(json!({"model": route.model, "voice": voice, "language": language}));
+                        // `read_as` differs from `language` for an approximate reading (Catalan as Spanish).
+                        self.last_runs.lock().unwrap().push(json!({"model": route.model, "voice": voice, "language": language, "read_as": self.language(route, language)}));
                         selected.insert(language.clone(), i);
                         output = Some(pcm);
                         break;

@@ -139,6 +139,7 @@ export const en = {
     tryReplyHint: "Reads your text with your voice models, the way a reply is read.",
     tryReplyPlaceholder: "Leave empty for a sample sentence",
     readBy: "Read by {{list}}.",
+    readAs: "(read as {{language}})",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

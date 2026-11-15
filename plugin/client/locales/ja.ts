@@ -137,6 +137,7 @@ export const ja: Messages = {
     tryReplyHint: "返信と同じように、音声モデルでこのテキストを読み上げます。",
     tryReplyPlaceholder: "空欄なら例文を読みます",
     readBy: "読み上げ：{{list}}。",
+    readAs: "（{{language}}の発音）",
   },
   voices: {
     persona: "{{name}} · {{gender}}",

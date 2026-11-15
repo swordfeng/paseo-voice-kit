@@ -958,3 +958,13 @@ giving 42 generations per row. Temperature and seed came from diagnostic overrid
 - With a cap set from each chunk's token count (0.8 s per token plus 4 s, at most 1200 frames),
   a forced 0.2 failure on 0.6B GGUF stopped at 403 200 samples (16.8 s of audio) instead of
   2 304 000. The next request on the same server succeeded, with no cooldown refusal.
+
+### Vocabulary prompt (2026-11-15)
+
+Whisper large-v3-turbo on Metal transcribed one Supertonic F1 clip of "Please open Paseo Voice
+Kit and check the settings." three times without and three times with the vocabulary "Paseo,
+Voice Kit". Without it, all three read "Passio Voice Kit"; with it, all three read "PaSeo Voice
+Kit". The vocabulary changes the output, and here brings the name closer, though not exact. A
+vocabulary written without the comma ("Paseo Voice Kit") gave "PaSeo" in one run and "PaaSio"
+in another.
+
