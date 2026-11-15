@@ -22,26 +22,8 @@ pub(super) fn text_chunks<'a>(
     mut count: impl FnMut(&str) -> Result<usize>,
 ) -> Result<Vec<&'a str>> {
     let mut out = Vec::new();
-    let mut pending = text;
-    while !pending.is_empty() {
-        let end = pending
-            .char_indices()
-            .find_map(|(i, c)| {
-                let end = i + c.len_utf8();
-                let decimal = c == '.'
-                    && pending[..i]
-                        .chars()
-                        .next_back()
-                        .is_some_and(|c| c.is_ascii_digit())
-                    && pending[end..]
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_digit());
-                (".!?。！？；;\n".contains(c) && !decimal).then_some(end)
-            })
-            .unwrap_or(pending.len());
-        let mut rest = &pending[..end];
-        pending = &pending[end..];
+    for sentence in crate::sentences::split(text) {
+        let mut rest = sentence;
         while !rest.is_empty() {
             if rest.len() <= PROBE_BYTES && count(rest)? <= TEXT_TOKENS {
                 out.push(rest);
@@ -71,7 +53,7 @@ pub(super) fn text_chunks<'a>(
             if let Some((i, c)) = rest[..best]
                 .char_indices()
                 .rev()
-                .find(|(_, c)| c.is_whitespace() || "，,、：:".contains(*c))
+                .find(|(_, c)| crate::sentences::clause_boundary(*c))
             {
                 let end = i + c.len_utf8();
                 if end > best / 2 && count(&rest[..end])? <= TEXT_TOKENS {

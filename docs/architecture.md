@@ -147,6 +147,15 @@ existing 1200 speech token/96-second generation limits and ten-minute assembled
 output cap remain. These changes are in the source for 0.1.1;
 the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
+Language routing and Qwen token budgeting share `sentences.rs` for boundaries.
+It handles Latin/CJK punctuation, Arabic/Urdu sentence marks, Indic danda,
+ellipsis, Unicode line/paragraph separators, punctuation runs and closing quotes.
+Decimal/version numbers, common abbreviations/initials, and URLs/email addresses
+are protected by conservative heuristics. Oversized Qwen clauses also recognize
+Arabic commas. This is not a full linguistic parser: ambiguous abbreviations may
+stay joined, and the model-token budget still bounds long fragments. Same-language
+routing runs still merge; this does not change Paseo's playback segmentation.
+
 The common speech API shortens excessive outer silence after the complete reply
 has been assembled and tempo applied, before WAV/PCM encoding. It applies to all
 local and remote TTS engines. Edges longer than 750 ms retain a 250 ms guard;

@@ -10,6 +10,7 @@ mod lang;
 mod probe;
 mod runtime;
 mod speech_filter;
+mod sentences;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 

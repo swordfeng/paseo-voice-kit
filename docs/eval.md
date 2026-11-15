@@ -835,3 +835,22 @@ the baseline and returned 5.27 seconds after automatic trimming. Read-back match
 the sentence, and raw PCM matched the WAV sample data exactly. The rebuilt server
 was deployed with rollback retained; the plugin and live preview succeeded and
 preferences were unchanged. No daemon restart was used.
+
+### Shared multilingual TTS boundaries (2026-11-15)
+
+Language routing and both Qwen backends now use one source-preserving boundary
+module. Tests cover Latin/CJK punctuation, Arabic/Urdu marks, Indic danda,
+ellipsis, Unicode line/paragraph breaks, closing quotes and punctuation runs.
+Other regression cases preserve decimals, version numbers, common abbreviations,
+initials, URLs including query strings, and email addresses. Mixed Arabic/Chinese
+and Hindi/English routing tests verify language separation without whitespace.
+Qwen's 64-text-token budget, sampling, instructions and output trimming are unchanged.
+
+55 native tests passed (4 local fixtures ignored). This uses conservative
+heuristics, not a complete linguistic parser; ambiguous abbreviations can remain
+joined. Same-language routing runs still merge. This change does not alter Paseo's
+separate playback segmenter or enable end-to-end streaming.
+The rebuilt server was deployed with rollback retained, then only Voice Kit was
+reloaded. All speech sites became active and preferences matched the pre-deploy
+snapshot. A live preview containing Chinese quotes and decimal 0.2 successfully
+synthesized through MLX Metal; no broad model evaluation was repeated.
