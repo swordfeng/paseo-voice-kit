@@ -353,9 +353,11 @@ export function CustomModelForm({
           )}
           {kind === "tts" && !qwen ? <LanguagePicker theme={theme} value={draft.languages ?? []} onChange={(languages) => set({ languages })} /> : null}
           {found?.suggestion.source === "mlx" || MLX_FAMILY_VALUES.has(draft.family ?? "") ? (
-            <View style={{ gap: 6, paddingHorizontal: 4 }}>
+            <View style={{ gap: 6 }}>
               <Text style={styles.note}>{t("form.mlxNote")}</Text>
-              <MlxRuntimeStatus theme={theme} showReady />
+              <View style={{ paddingHorizontal: 4 }}>
+                <MlxRuntimeStatus theme={theme} showReady />
+              </View>
             </View>
           ) : null}
           {tried && problem ? <Text style={styles.error}>{problem}</Text> : null}
