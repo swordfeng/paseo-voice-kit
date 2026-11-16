@@ -126,6 +126,27 @@ on the unpacked asset with `--accelerator cpu` (short real-model checks, see
 `scripts/test-sve-dots.py --require-sve`, which checks the packaged SVE dot-product kernels
 against exact scalar results.
 
+CI doesn't redo work whose inputs haven't changed:
+
+- Before building, CI hashes every file the native builds and their checks read, by Git
+  object ID. A platform that already built and passed every check from the same inputs is
+  skipped. This covers a rerun, a pull request that only changes docs or `plugin/client/`, and
+  a merge whose native inputs were already tested. Each platform records its pass in a small
+  cache entry (`native-ok-<platform>-<hash>`).
+- When a platform does build, the Qwen worker and the MLX helper are restored from caches
+  keyed by their sources, build scripts, the Vulkan toolchain pins, the OS and the C compiler's
+  version (plus Xcode for MLX). The Rust cache also keeps the vendored whisper-rs-sys build (a
+  workspace member for this reason), and files under `server/` get their last commit's time so
+  Cargo rebuilds only what changed. CI pins the Rust toolchain (1.92.0) so the cache stays
+  valid and releases use a known compiler. The smoke test's model downloads are cached once for
+  all platforms, keyed by `server/catalog.json`.
+- CI also runs on pushes to main. Pull requests can only restore caches from their own branch
+  or the default branch, so this keeps every pull request's caches warm. A new push to a pull
+  request cancels its running checks.
+
+Release tags use none of this: every platform is built from source and tested against fresh
+downloads.
+
 Tested beyond CI: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu 22.04,
 clang 14), including real Whisper transcription with and without a Vulkan loader, and
 lavapipe; Linux x64 the same way under emulation, running `devices` and a Whisper encoder

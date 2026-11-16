@@ -58,3 +58,9 @@ strip = true
 # whisper-rs-sys with an added `backend-dl` build mode (ggml backend plugins); otherwise unchanged.
 [patch.crates-io]
 whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
+
+# The vendored whisper-rs-sys is a workspace member only so CI's Rust cache keeps its slow
+# whisper.cpp build (rust-cache drops path crates that are neither members nor outside this
+# folder). Cargo commands here still act on voicekit alone.
+[workspace]
+members = [".", "vendor/whisper-rs-sys"]

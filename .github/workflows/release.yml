@@ -9,6 +9,9 @@ name: release
 on:
   push:
     tags: ["v*"]
+    # Runs on main keep its caches warm: pull requests can only restore caches from their own
+    # branch or the default branch.
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -21,6 +24,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces its running checks. Tags and main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Vulkan build inputs. Linux: headers, loader (link stub for the Vulkan module) and glslc from
   # conda-forge, because ubuntu-22.04's headers (1.3.204) are too old for ggml-vulkan and it has
@@ -32,27 +40,68 @@ env:
 jobs:
   platforms:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
+      native: ${{ steps.select.outputs.native }}
+      inputs: ${{ steps.inputs.outputs.hash }}
     steps:
       - uses: actions/checkout@v4
+      # Every file the native builds and their checks read, by Git object ID: the same on every
+      # platform and branch for the same content (unlike hashFiles, which sees CRLF on Windows).
+      # Docs, plugin/client, plugin/assets and the plugin-only test scripts aren't inputs.
+      - id: inputs
+        run: |
+          hash=$(git ls-tree -r HEAD -- server build licenses LICENSE plugin/licenses \
+            plugin/MODEL_LICENSES.md plugin/server plugin/shared plugin/package.json \
+            plugin/npm-shrinkwrap.json .github/workflows/release.yml \
+            scripts/build-mlx-worker.py scripts/build-qwen-worker.py scripts/collect-licenses.py \
+            scripts/fetch-build-input.py scripts/package-release.sh scripts/smoke-real-models.py \
+            scripts/test-sve-dots.py scripts/verify-native-package.mjs | sha256sum | cut -c1-40)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+      # A platform that already built and passed every check from these exact inputs is skipped,
+      # for pull requests anywhere and for main when the record is from main (so main's caches
+      # stay filled). Tags and manual runs build every selected platform.
       - id: select
         env:
           PLATFORM: ${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUTS: ${{ steps.inputs.outputs.hash }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, subprocess
           platforms = json.load(open('build/platforms.json'))
           target = os.environ['PLATFORM']
           selected = [p for p in platforms if target == 'all' or p['key'] == target or target == 'linux' and p['key'].startswith('linux-')]
           if not selected:
               raise SystemExit('Unknown platform: ' + os.environ['PLATFORM'])
+          event, ref = os.environ['EVENT'], os.environ['REF']
+          reuse = event == 'pull_request' or (event == 'push' and ref == 'refs/heads/main')
+          def passed(key):
+              name = 'native-ok-' + key + '-' + os.environ['INPUTS']
+              out = subprocess.run(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/actions/caches?key=' + name],
+                                   capture_output=True, text=True)
+              if out.returncode:
+                  print('cache lookup failed, building:', out.stderr.strip())
+                  return False
+              refs = [c['ref'] for c in json.loads(out.stdout).get('actions_caches', []) if c['key'] == name]
+              return any(r == 'refs/heads/main' for r in refs) if event == 'push' else bool(refs)
+          build = [p for p in selected if not (reuse and passed(p['key']))]
+          for p in selected:
+              print(p['key'], 'build' if p in build else 'already passed with these inputs, skipped')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print('matrix=' + json.dumps({'include': selected}), file=output)
+              # An empty matrix is invalid even for a skipped job, so keep the full one then.
+              print('matrix=' + json.dumps({'include': build or selected}), file=output)
+              print('native=' + ('true' if build else 'false'), file=output)
           PY
 
   build:
     needs: platforms
+    if: needs.platforms.outputs.native == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
@@ -63,6 +112,40 @@ jobs:
       GGML_NATIVE: "OFF"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, for the file times below.
+          fetch-depth: 0
+      # Cargo decides whether path crates (voicekit and the vendored whisper-rs-sys) are up to
+      # date from file times, and a checkout makes every file new. Set each file under server/
+      # to the time of the last commit that changed it, so files that didn't change match the
+      # cached build and whisper.cpp isn't rebuilt.
+      - name: Restore file times from Git history
+        shell: bash
+        run: |
+          git log --format='format:%x00%ct' --name-only -- server | python3 -c '
+          import os, sys
+          seen, when = set(), 0
+          for line in sys.stdin.read().split("\n"):
+              if line.startswith("\0"):
+                  when = int(line[1:])
+              elif line and line not in seen:
+                  seen.add(line)
+                  if os.path.isfile(line):
+                      os.utime(line, (when, when))
+          # Directories too: Cargo counts them when a build script watches a folder (whisper-rs-sys
+          # watches whisper.cpp). Each gets the newest time inside it, bottom-up.
+          dirs = 0
+          for root, subdirs, files in os.walk("server", topdown=False):
+              rel = root.replace(os.sep, "/")
+              if rel == "server/target" or rel.startswith("server/target/"):
+                  continue
+              times = [os.stat(os.path.join(root, n)).st_mtime for n in files + subdirs
+                       if not os.path.islink(os.path.join(root, n))]
+              if times:
+                  os.utime(root, (max(times), max(times)))
+                  dirs += 1
+          print(len(seen), "files and", dirs, "directories dated from history")
+          '
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -87,11 +170,19 @@ jobs:
           ninja --version
       - name: Locked archive verifier dependencies
         run: npm ci --prefix plugin --ignore-scripts
-      - uses: dtolnay/rust-toolchain@stable
+      # A fixed toolchain: releases don't change compiler with each stable release, the Rust cache
+      # isn't invalidated every six weeks, and Cargo's target layout is the one rust-cache knows
+      # (newer Cargo's layout lost whisper-rs-sys's fingerprints in the cache, so it rebuilt).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-          key: ${{ matrix.features }}-${{ hashFiles('build/native-inputs.json') }}
+          # Keep the workspace members' builds too: whisper-rs-sys (whisper.cpp and its Vulkan
+          # shaders) takes minutes to build. "ws" changes the key so such a cache gets saved.
+          key: ${{ matrix.features }}-ws-${{ hashFiles('build/native-inputs.json') }}
+          cache-workspace-crates: true
           cache-on-failure: true
       - name: Discard incompatible Visual Studio CMake cache
         if: runner.os == 'Windows'
@@ -148,6 +239,36 @@ jobs:
         working-directory: server
         shell: bash
         run: cargo build --locked --release --features "${{ matrix.features }}"
+      # whisper-rs-sys's build script copies the ggml shared libraries and backend modules next
+      # to the executable, but only when it runs. With whisper.cpp cached it doesn't, and the
+      # Rust cache drops loose files in target/release, so copy them from the cached build
+      # output with the build script's rules (copy_runtime_libs). macOS links statically.
+      - name: Put the ggml libraries next to the executable
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, os, re, shutil
+          outs = [p for p in glob.glob("server/target/release/build/whisper-rs-sys-*/out") if os.path.isdir(p)]
+          if not outs:
+              raise SystemExit("no whisper-rs-sys build output")
+          out = max(outs, key=lambda p: max((os.path.getmtime(f) for f in glob.glob(p + "/*/*")), default=0))
+          copied = 0
+          for sub, modules in (("lib", False), ("bin", True)):
+              folder = os.path.join(out, sub)
+              if not os.path.isdir(folder):
+                  continue
+              for name in os.listdir(folder):
+                  soname = re.fullmatch(r"lib.+\.so\.\d+", name) is not None
+                  module = modules and name.startswith("libggml-") and name.endswith(".so")
+                  if not (soname or module or name.lower().endswith(".dll")):
+                      continue
+                  dst = os.path.join("server/target/release", name)
+                  if os.path.lexists(dst):
+                      os.remove(dst)
+                  shutil.copy(os.path.join(folder, name), dst)
+                  copied += 1
+          print(copied, "libraries from", out)
+          PY
       - name: Nested CMake diagnostics (Windows)
         if: failure() && runner.os == 'Windows'
         shell: pwsh
@@ -162,23 +283,76 @@ jobs:
           cargo metadata --locked --format-version 1 --filter-platform "$host" --features "${{ matrix.features }}" --manifest-path server/Cargo.toml > "$RUNNER_TEMP/cargo-metadata.json"
           python3 scripts/collect-licenses.py "$RUNNER_TEMP/cargo-metadata.json" "$RUNNER_TEMP/voicekit-notices"
           echo "VOICEKIT_NOTICES=$RUNNER_TEMP/voicekit-notices" >> "$GITHUB_ENV"
+      # Workers are rebuilt only when their inputs change: the key covers their sources, build
+      # scripts, the Vulkan toolchain pins and the runner image. Other edits to this workflow
+      # don't invalidate them. Release tags always build from source and never use or fill these
+      # caches.
+      - name: Runner image for worker cache keys
+        id: runner-image
+        shell: bash
+        run: |
+          # The OS, the C compiler's version line and the Vulkan pins, not the exact runner image:
+          # images roll out gradually, so consecutive jobs can land on different ones.
+          # MSVC's cl prints its banner but exits non-zero on --version.
+          compiler=$("${CC:-cc}" --version 2>&1 | head -1 || true)
+          echo "compiler: $compiler"
+          id=$(COMPILER="$compiler" python3 -c 'import hashlib, os; print(hashlib.sha256((os.environ["COMPILER"] + " " + os.environ["VULKAN_CONDA_PACKAGES"] + " " + os.environ["VULKAN_SDK_VERSION"]).encode()).hexdigest()[:16])')
+          echo "version=${ImageOS:-unknown}-$id" >> "$GITHUB_OUTPUT"
+          # A restore unpacks over what is there; start from empty folders.
+          rm -rf server/target/release/gguf-runtime server/target/release/mlx-runtime
+      - name: Restore Qwen GGUF worker
+        id: qwen-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/release/gguf-runtime
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt') }}
       - name: Build isolated Qwen GGUF worker
+        if: steps.qwen-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           flags=()
           if [[ "${{ runner.os }}" != "macOS" ]]; then flags+=(--vulkan); fi
           python3 scripts/build-qwen-worker.py --target-dir server/target/release "${flags[@]}"
+      - name: Save Qwen GGUF worker
+        if: ${{ steps.qwen-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/release/gguf-runtime
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt') }}
       - name: Select Swift build tools
         if: matrix.key == 'darwin-arm64'
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-      - name: Build bundled native MLX worker
+      - name: MLX worker cache key
+        id: mlx-key
         if: matrix.key == 'darwin-arm64'
+        shell: bash
+        # Git object IDs of the committed sources: unlike hashFiles, unaffected by the .build
+        # folder the build creates before the save step computes the key again.
+        run: |
+          echo "xcode=$(xcodebuild -version | tr -s ' \n' '-')" >> "$GITHUB_OUTPUT"
+          echo "src=$(git rev-parse HEAD:server/mlx-worker HEAD:scripts/build-mlx-worker.py | tr '\n' '-' | cut -c1-83)" >> "$GITHUB_OUTPUT"
+      - name: Restore bundled native MLX worker
+        id: mlx-cache
+        if: ${{ matrix.key == 'darwin-arm64' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/release/mlx-runtime
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ steps.mlx-key.outputs.src }}
+      - name: Build bundled native MLX worker
+        if: matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           xcodebuild -downloadComponent MetalToolchain
-          python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 900
+          python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 1800
+      - name: Save bundled native MLX worker
+        if: ${{ matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/release/mlx-runtime
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ steps.mlx-key.outputs.src }}
       - name: Package
         shell: bash
         run: |
@@ -238,6 +412,37 @@ jobs:
         if: matrix.key == 'linux-arm64'
         shell: bash
         run: python3 scripts/test-sve-dots.py "$(dirname "$EXE")" --require-sve
+      # The smoke test's models are the same on every platform, so one cache serves all five. The
+      # larger Qwen model (only Windows and Linux x64 test it) is cached on its own, from a
+      # separate folder. Keyed by the catalog, which pins every file's checksum, using Git's
+      # object ID: hashFiles would differ on Windows, which checks text out with CRLF.
+      # Release tags download fresh.
+      - name: Model cache key
+        id: models-key
+        shell: bash
+        run: echo "catalog=$(git rev-parse HEAD:server/catalog.json)" >> "$GITHUB_OUTPUT"
+      - name: Restore real-model downloads
+        id: models-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-models
+          key: real-models-${{ steps.models-key.outputs.catalog }}
+          enableCrossOsArchive: true
+      - name: Restore the larger Qwen model
+        id: large-model-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && (matrix.key == 'win32-x64' || matrix.key == 'linux-x64') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-large-model
+          key: real-models-large-${{ steps.models-key.outputs.catalog }}
+          enableCrossOsArchive: true
+      - name: Put the larger Qwen model in place
+        if: steps.large-model-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          mkdir -p .ci-models
+          mv .ci-large-model/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 .ci-models/
       - name: Real model CPU inference and round trips
         id: real-models
         timeout-minutes: 12
@@ -248,7 +453,7 @@ jobs:
             extra+=(--large-qwen)
           fi
           python3 scripts/smoke-real-models.py --exe "$EXE" \
-            --models-dir "$RUNNER_TEMP/real-models" --output "$RUNNER_TEMP/real-model-report" \
+            --models-dir "$GITHUB_WORKSPACE/.ci-models" --output "$RUNNER_TEMP/real-model-report" \
             --accelerator cpu --timeout 540 "${extra[@]}"
       - name: Diagnose Linux ARM CPU variant failures
         if: failure() && steps.real-models.outcome == 'failure' && matrix.key == 'linux-arm64'
@@ -267,9 +472,31 @@ jobs:
             fi
           done
           python3 scripts/smoke-real-models.py --exe "$EXE" \
-            --models-dir "$RUNNER_TEMP/real-models" \
+            --models-dir "$GITHUB_WORKSPACE/.ci-models" \
             --output "$RUNNER_TEMP/real-model-report/baseline" \
             --accelerator cpu --timeout 540
+      - name: Set the larger Qwen model aside for its own cache
+        if: ${{ success() && steps.large-model-cache.outcome == 'success' }}
+        shell: bash
+        run: |
+          mkdir -p .ci-large-model
+          if [ -d .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 ]; then
+            mv .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 .ci-large-model/
+          fi
+      - name: Save real-model downloads
+        if: ${{ success() && steps.models-cache.outcome == 'success' && steps.models-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-models
+          key: real-models-${{ steps.models-key.outputs.catalog }}
+          enableCrossOsArchive: true
+      - name: Save the larger Qwen model
+        if: ${{ success() && steps.large-model-cache.outcome == 'success' && steps.large-model-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-large-model
+          key: real-models-large-${{ steps.models-key.outputs.catalog }}
+          enableCrossOsArchive: true
       - name: Preserve real model diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -284,6 +511,20 @@ jobs:
           name: voicekit-${{ matrix.key }}
           overwrite: true
           path: ${{ env.ASSET }}
+      # Records that this platform built and passed every check from these exact inputs; the
+      # platforms job skips it next time the inputs are the same. Tags don't record.
+      - name: Record a passing build
+        if: ${{ success() && !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          mkdir -p .ci-native-ok
+          echo "${{ github.run_id }} ${{ github.sha }}" > .ci-native-ok/run
+      - name: Save the passing-build record
+        if: ${{ success() && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-native-ok
+          key: native-ok-${{ matrix.key }}-${{ needs.platforms.outputs.inputs }}
 
   plugin:
     runs-on: ubuntu-22.04
