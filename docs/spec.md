@@ -23,9 +23,9 @@ covers the rule yet; the list is at the end of the [Release checklist](#release-
 
 ## 0. Scope
 
-- S-0 Nothing has been released to users. The 0.1.0 tag exists, but the only
-  installations are the maintainer's two test machines. No rule needs migration code for
-  earlier settings or files.
+- S-0 0.1.1 (2026-11-16) is the first release meant for users. Before it, the only
+  installations were the maintainer's two test machines, so no rule needs migration code
+  for earlier settings or files.
 - S-1 The release is the plugin from the default branch plus the native `voicekit` server
   for darwin-arm64, darwin-x64, linux-x64, linux-arm64 and win32-x64.
 - S-2 macOS, Windows and Linux are all officially supported in 0.1.1, none experimental.

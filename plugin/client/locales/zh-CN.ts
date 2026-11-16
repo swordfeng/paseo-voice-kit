@@ -140,7 +140,6 @@ export const zhCN: Messages = {
     readAs: "（按{{language}}发音）",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "女声 {{n}}",
       male: "男声 {{n}}",
@@ -265,11 +264,11 @@ export const zhCN: Messages = {
     },
     qwen06Gguf: {
       label: "Qwen3-TTS 0.6B",
-      description: "支持中文、英语、日语、韩语、德语、法语、俄语、葡萄牙语、西班牙语和意大利语，共 9 个声音，每个声音都能说这些语言。其中两个声音以北京话或四川话说中文。有 GPU 时使用 GPU，否则使用 CPU。已在 Apple 芯片的 Mac 上测试；其他电脑尚未测试。",
+      description: "支持中文、英语、日语、韩语、德语、法语、俄语、葡萄牙语、西班牙语和意大利语，共 9 个声音，每个声音都能说这些语言。其中两个声音以北京话或四川话说中文。有 GPU 时使用 GPU，否则使用 CPU。已在 Apple 芯片的 Mac 和 NVIDIA 显卡上测试；其他显卡尚未测试。",
     },
     qwen17Gguf: {
       label: "Qwen3-TTS 1.7B",
-      description: "较大的 Qwen3-TTS 模型：同样的 10 种语言和 9 个声音，下载更大。有 GPU 时使用 GPU，否则使用 CPU。已在 Apple 芯片的 Mac 上测试；其他电脑尚未测试。",
+      description: "较大的 Qwen3-TTS 模型：同样的 10 种语言和 9 个声音，下载更大。有 GPU 时使用 GPU，否则使用 CPU。已在 Apple 芯片的 Mac 和 NVIDIA 显卡上测试；其他显卡尚未测试。",
     },
   },
   voiceModels: {

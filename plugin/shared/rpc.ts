@@ -275,10 +275,6 @@ export const RouteVoicesSchema = z.object({
   label: z.string(),
   model: z.string(),
   voices: z.array(VoiceSchema),
-  /** Persona id -> this route's voice in that persona. */
-  persona_voices: z.record(z.string(), z.string()).default({}),
-  /** Every persona uses this one voice on this route (single-speaker model): nothing to pick. */
-  shared_voice: z.string().nullable().optional(),
   /** True while this route's model is loaded in memory (models load on first use). */
   ready: z.boolean().default(true),
   /** Whether this route's model files are on disk. */

@@ -142,7 +142,6 @@ export const en = {
     readAs: "(read as {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "Female {{n}}",
       male: "Male {{n}}",
@@ -268,11 +267,11 @@ export const en = {
     },
     qwen06Gguf: {
       label: "Qwen3-TTS 0.6B",
-      description: "Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish and Italian, with 9 voices; each voice can speak all of them. Two voices speak Chinese in Beijing or Sichuan dialect. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon; other computers are untested.",
+      description: "Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish and Italian, with 9 voices; each voice can speak all of them. Two voices speak Chinese in Beijing or Sichuan dialect. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon and on NVIDIA GPUs; other GPUs are untested.",
     },
     qwen17Gguf: {
       label: "Qwen3-TTS 1.7B",
-      description: "The larger Qwen3-TTS model: the same 10 languages and 9 voices, with a bigger download. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon; other computers are untested.",
+      description: "The larger Qwen3-TTS model: the same 10 languages and 9 voices, with a bigger download. Uses the GPU when available, otherwise the CPU. Tested on Macs with Apple Silicon and on NVIDIA GPUs; other GPUs are untested.",
     },
   },
   voiceModels: {

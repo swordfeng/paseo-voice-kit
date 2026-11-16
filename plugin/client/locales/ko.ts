@@ -140,7 +140,6 @@ export const ko: Messages = {
     readAs: "({{language}} 발음)",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "여성 {{n}}",
       male: "남성 {{n}}",
@@ -265,11 +264,11 @@ export const ko: Messages = {
     },
     qwen06Gguf: {
       label: "Qwen3-TTS 0.6B",
-      description: "중국어, 영어, 일본어, 한국어, 독일어, 프랑스어, 러시아어, 포르투갈어, 스페인어, 이탈리아어를 지원하며 목소리는 9개입니다. 각 목소리는 이 언어를 모두 말할 수 있습니다. 두 목소리는 중국어를 베이징 방언이나 쓰촨 방언으로 말합니다. GPU가 있으면 GPU를, 없으면 CPU를 씁니다. Apple 실리콘 Mac에서 확인했으며 다른 컴퓨터는 확인하지 않았습니다.",
+      description: "중국어, 영어, 일본어, 한국어, 독일어, 프랑스어, 러시아어, 포르투갈어, 스페인어, 이탈리아어를 지원하며 목소리는 9개입니다. 각 목소리는 이 언어를 모두 말할 수 있습니다. 두 목소리는 중국어를 베이징 방언이나 쓰촨 방언으로 말합니다. GPU가 있으면 GPU를, 없으면 CPU를 씁니다. Apple 실리콘 Mac과 NVIDIA GPU에서 확인했으며 다른 GPU는 확인하지 않았습니다.",
     },
     qwen17Gguf: {
       label: "Qwen3-TTS 1.7B",
-      description: "더 큰 Qwen3-TTS 모델입니다. 같은 10개 언어와 9개 목소리를 지원하며 다운로드가 더 큽니다. GPU가 있으면 GPU를, 없으면 CPU를 씁니다. Apple 실리콘 Mac에서 확인했으며 다른 컴퓨터는 확인하지 않았습니다.",
+      description: "더 큰 Qwen3-TTS 모델입니다. 같은 10개 언어와 9개 목소리를 지원하며 다운로드가 더 큽니다. GPU가 있으면 GPU를, 없으면 CPU를 씁니다. Apple 실리콘 Mac과 NVIDIA GPU에서 확인했으며 다른 GPU는 확인하지 않았습니다.",
     },
   },
   voiceModels: {

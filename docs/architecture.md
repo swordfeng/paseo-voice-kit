@@ -148,8 +148,7 @@ is re-counted before use. The shared planner preserves Unicode and all source te
 then concatenates PCM. An 8 KB probe limit bounds private JSON messages independently
 of the text-token budget. Text-token counts do not bound speech duration, so the
 existing 1200 speech token/96-second generation limits and ten-minute assembled
-output cap remain. These changes are in the source for 0.1.1;
-the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
+output cap remain. These changes shipped in 0.1.1.
 
 Language routing and Qwen token budgeting share `sentences.rs` for boundaries.
 It handles Latin/CJK punctuation, Arabic/Urdu sentence marks, Indic danda,

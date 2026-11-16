@@ -149,26 +149,6 @@ impl ModelEntry {
         self.options.get(key).and_then(|v| v.as_bool())
     }
 
-    /// Personas pair a voice per enabled model.
-    pub fn personas(&self) -> Vec<crate::engine::route::Persona> {
-        let Some(list) = self.options.get("personas").and_then(|p| p.as_array()) else { return vec![] };
-        list.iter()
-            .filter_map(|p| {
-                Some(crate::engine::route::Persona {
-                    id: p.get("id")?.as_str()?.to_string(),
-                    label: p.get("label")?.as_str()?.to_string(),
-                    gender: p.get("gender").and_then(|g| g.as_str()).unwrap_or_default().to_string(),
-                    voices: p
-                        .get("voices")?
-                        .as_object()?
-                        .iter()
-                        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
-                        .collect(),
-                })
-            })
-            .collect()
-    }
-
     /// Enabled model IDs in preference order.
     pub fn chain_models(&self) -> Vec<String> {
         self.options.get("chain").and_then(|v| v.as_array()).into_iter().flatten()

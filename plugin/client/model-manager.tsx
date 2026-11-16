@@ -442,7 +442,7 @@ function CardVoice(props: ModelManagerProps & { model: Model; route: RouteVoices
   const [gender, setGender] = useState("");
   const muted = { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 };
   const voices = route?.voices ?? [];
-  const chosen = modelVoice(values, m.id, m.family) ?? route?.shared_voice ?? undefined;
+  const chosen = modelVoice(values, m.id, m.family);
   const current = voices.find((v) => v.id === chosen) ?? (chosen ? undefined : voices[0]);
   const play = (
     <Button
@@ -464,9 +464,8 @@ function CardVoice(props: ModelManagerProps & { model: Model; route: RouteVoices
   }
   // Downloaded but its voices aren't known before it loads: a preview loads it.
   if (voices.length === 0) return route?.installed ? row(<Text style={muted}>{t("voiceModels.voiceAfterLoad")}</Text>) : <Text style={muted}>{t("voiceModels.voiceAfterDownload")}</Text>;
-  if (voices.length === 1 || route?.shared_voice) {
-    const only = voices.find((v) => v.id === route?.shared_voice) ?? voices[0];
-    return row(<Text style={muted}>{t("voiceModels.voiceSingle", { voice: voiceLabel(t, locale, only) })}</Text>);
+  if (voices.length === 1) {
+    return row(<Text style={muted}>{t("voiceModels.voiceSingle", { voice: voiceLabel(t, locale, voices[0]) })}</Text>);
   }
   const filtering = voices.length > FILTER_FROM;
   const languages = [...new Set(voices.map((v) => v.language).filter((l) => l && l !== "multi"))];

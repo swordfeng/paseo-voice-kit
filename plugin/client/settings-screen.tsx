@@ -538,7 +538,9 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
               label={t("speaking.tryReply")}
               hint={replyRuns?.length ? t("speaking.readBy", { list: joinList(t, replyRuns.map(spokenBy)) }) : t("speaking.tryReplyHint")}
             >
-              <View style={{ width: layout.compact ? "100%" : 360, maxWidth: "100%" }}>
+              {/* On phones the field shares the row with its label instead of taking the full width,
+                  which squeezed the label to one letter per line where the row is horizontal. */}
+              <View style={layout.compact ? { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 140 } : { width: 360, maxWidth: "100%" }}>
                 <FieldWithAction
                   theme={theme}
                   value={replyText}
