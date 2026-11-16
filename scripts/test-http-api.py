@@ -124,6 +124,8 @@ with tempfile.TemporaryDirectory(prefix='vk-http-api-') as temporary:
             check('API-3 a malformed pull is a JSON 4xx', 400 <= status < 500 and code(data) == 'invalid_request', (status, data))
             status, data = call('POST', '/v1/audio/speech', body=json.dumps({'input': 'hello'}), headers={'Content-Type': 'application/json'})
             check('API-3 speech without response_format names pcm and wav', status == 400 and 'pcm' in data['error']['message'], (status, data))
+            status, data = call('POST', '/v1/audio/speech', body=json.dumps({'input': '[stub token_limit]', 'response_format': 'wav'}), headers={'Content-Type': 'application/json'})
+            check('WRK-5a a worker-reported failure keeps its code (token_limit, 503)', status == 503 and code(data) == 'token_limit', (status, data))
             status, data = call('POST', '/v1/audio/transcriptions', body=b'{}', headers={'Content-Type': 'application/json'})
             check('API-3 a transcription that is not multipart is a JSON 4xx', 400 <= status < 500 and code(data) == 'invalid_request', (status, data))
             # STT-8: undecodable audio is the request's fault; silence needs an installed model.

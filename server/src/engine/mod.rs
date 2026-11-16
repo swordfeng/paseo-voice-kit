@@ -165,7 +165,11 @@ pub mod stub {
     /// Two short beeps (440 Hz then 660 Hz) at 24 kHz.
     pub struct StubTts;
     impl TtsEngine for StubTts {
-        fn synthesize(&self, _req: SpeakRequest<'_>, _timings: &mut Timings) -> anyhow::Result<Pcm> {
+        fn synthesize(&self, req: SpeakRequest<'_>, _timings: &mut Timings) -> anyhow::Result<Pcm> {
+            // Lets HTTP tests see how a worker-reported failure is answered.
+            if req.text == "[stub token_limit]" {
+                return Err(RequestFailure { code: Some("token_limit".into()), message: "stub synthesis failed: speech token limit reached".into() }.into());
+            }
             let rate = 24_000u32;
             let mut samples = Vec::new();
             for (freq, len) in [(440.0f32, 0.25f32), (0.0, 0.1), (660.0, 0.25)] {
