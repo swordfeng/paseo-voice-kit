@@ -114,15 +114,13 @@ function gender(t: Translate, value: string): string | null {
 }
 
 /**
- * A voice's label in the UI language. Persona names (Mia, Leo, …) and voice names (Maple, …)
+ * A voice's label in the UI language. Voice names (Maple, …)
  * stay; the descriptive parts are translated. Unknown labels are shown as they are.
  */
 export function voiceLabel(t: Translate, locale: string, voice: { label: string; language: string; gender: string }): string {
   const g = gender(t, voice.gender);
   if (!g) return voice.label;
-  let m = /^(.+) · (female|male)$/.exec(voice.label);
-  if (m) return t("voices.persona", { name: m[1], gender: g });
-  m = /^(Female|Male) (\d+)$/.exec(voice.label);
+  let m = /^(Female|Male) (\d+)$/.exec(voice.label);
   if (m) return t(m[1] === "Female" ? "voices.numbered.female" : "voices.numbered.male", { n: m[2] });
   m = /^(.+) \(([^,()]+), (female|male)\)$/.exec(voice.label);
   if (m) {

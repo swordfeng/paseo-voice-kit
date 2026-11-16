@@ -1,6 +1,6 @@
 //! Ordered, native-language TTS candidates. Availability never silently drops source text.
 use super::{
-    route::{Persona, Route, RouteVoices},
+    route::{Route, RouteVoices},
     SpeakRequest, Timings, TtsEngine, Voice,
 };
 use crate::{audio::Pcm, lang};
@@ -90,7 +90,6 @@ mod tests {
                 id.into(),
                 id.into(),
                 langs.into_iter().map(str::to_string).collect(),
-                None,
                 vec![],
             ))
         })
@@ -98,7 +97,6 @@ mod tests {
         (
             ChainTts::new(
                 models,
-                vec![],
                 BTreeMap::new(),
                 BTreeMap::new(),
                 BTreeSet::new(),
@@ -228,12 +226,11 @@ mod tests {
                     id.into(),
                     id.into(),
                     langs.iter().map(|l| l.to_string()).collect(),
-                    None,
                     vec![],
                 ))
             })
             .collect();
-        let chain = ChainTts::new(routes, vec![], BTreeMap::new(), BTreeMap::new(), ["ca".to_string()].into_iter().collect());
+        let chain = ChainTts::new(routes, BTreeMap::new(), BTreeMap::new(), ["ca".to_string()].into_iter().collect());
         (chain, calls)
     }
     fn speak_as(chain: &ChainTts, text: &str, language: &str) -> anyhow::Result<Pcm> {
@@ -287,7 +284,6 @@ fn latin_letters_only(text: &str) -> bool {
 
 pub struct ChainTts {
     pub models: Vec<Arc<Route>>,
-    personas: Vec<Persona>,
     preferred: BTreeMap<String, String>,
     custom: BTreeMap<String, String>,
     approximate: BTreeSet<String>,
@@ -297,14 +293,12 @@ pub struct ChainTts {
 impl ChainTts {
     pub fn new(
         models: Vec<Arc<Route>>,
-        personas: Vec<Persona>,
         preferred: BTreeMap<String, String>,
         custom: BTreeMap<String, String>,
         approximate: BTreeSet<String>,
     ) -> Self {
         Self {
             models,
-            personas,
             preferred,
             custom,
             approximate,
@@ -363,8 +357,7 @@ impl ChainTts {
         RoutingError { code, languages }.into()
     }
     /// The voice chosen for this model (`model_voices`), whatever the request names; otherwise a
-    /// voice the request names that the model has, a persona from a hand-written catalog, or the
-    /// model's default.
+    /// voice the request names that the model has, or the model's default.
     fn voice(&self, route: &Route, requested: &str) -> String {
         if let Some(v) = self.custom.get(&route.model) {
             return v.clone();
@@ -372,21 +365,7 @@ impl ChainTts {
         if route.catalog_voices.iter().any(|v| v.id == requested) {
             return requested.into();
         }
-        if let Some(persona) = self
-            .personas
-            .iter()
-            .find(|p| p.id == requested)
-            .or_else(|| self.personas.first())
-        {
-            if let Some(v) = persona.voices.get(&route.model) {
-                return v.clone();
-            }
-        }
-        route
-            .shared_voice
-            .clone()
-            .or_else(|| route.catalog_voices.first().map(|v| v.id.clone()))
-            .unwrap_or_default()
+        route.catalog_voices.first().map(|v| v.id.clone()).unwrap_or_default()
     }
 }
 impl TtsEngine for ChainTts {
@@ -512,17 +491,9 @@ impl TtsEngine for ChainTts {
             sample_rate: 24000,
         })
     }
+    /// A voice list has no voices of its own: each model's voice is picked on its card.
     fn voices(&self) -> Vec<Voice> {
-        self.personas
-            .iter()
-            .map(|p| Voice {
-                id: p.id.clone(),
-                label: p.label.clone(),
-                language: "multi".into(),
-                gender: p.gender.clone(),
-                featured: true,
-            })
-            .collect()
+        Vec::new()
     }
     fn routes(&self) -> Vec<RouteVoices> {
         self.models
@@ -538,12 +509,6 @@ impl TtsEngine for ChainTts {
                     voices: loaded
                         .as_ref()
                         .map_or_else(|| r.catalog_voices.clone(), |e| e.voices()),
-                    persona_voices: self
-                        .personas
-                        .iter()
-                        .filter_map(|p| p.voices.get(&r.model).map(|v| (p.id.clone(), v.clone())))
-                        .collect(),
-                    shared_voice: r.shared_voice.clone(),
                     ready: loaded.as_ref().is_some_and(|e| e.accelerator() != "idle"),
                     accelerator: loaded.as_ref().map(|e| e.accelerator().to_string()),
                     installed: r.installed(),

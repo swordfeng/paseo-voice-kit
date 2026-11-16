@@ -142,7 +142,6 @@ export const en = {
     readAs: "(read as {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "Female {{n}}",
       male: "Male {{n}}",

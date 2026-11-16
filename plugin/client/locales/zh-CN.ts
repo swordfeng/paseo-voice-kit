@@ -140,7 +140,6 @@ export const zhCN: Messages = {
     readAs: "（按{{language}}发音）",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "女声 {{n}}",
       male: "男声 {{n}}",

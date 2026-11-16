@@ -140,7 +140,6 @@ export const ptBR: Messages = {
     readAs: "(lido como {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "Feminina {{n}}",
       male: "Masculina {{n}}",

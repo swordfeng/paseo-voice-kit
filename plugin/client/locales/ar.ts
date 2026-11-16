@@ -141,7 +141,6 @@ export const ar: Messages = {
     readAs: "(بنطق {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "أنثى {{n}}",
       male: "ذكر {{n}}",

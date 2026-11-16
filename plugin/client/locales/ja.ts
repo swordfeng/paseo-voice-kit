@@ -140,7 +140,6 @@ export const ja: Messages = {
     readAs: "（{{language}}の発音）",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "女性 {{n}}",
       male: "男性 {{n}}",

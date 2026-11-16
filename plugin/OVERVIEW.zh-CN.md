@@ -8,9 +8,9 @@ Voice Kit 会在守护进程旁启动一个小型原生语音服务（voicekit�
 
 ## 设置
 
-语音服务是一个单独的原生程序。项目在 GitHub 上的 v0.1.0 版本提供了 macOS（Apple 芯片和 Intel）、Linux（x64 和 arm64）和 Windows（x64）的预构建服务程序。Voice Kit 首次启动时，会在下载适合你平台的版本前征求你的同意，说明下载来源，并按固定的校验和验证。如果拒绝，Voice Kit 会关闭，Paseo 继续使用内置语音。你也可以在“程序路径”设置中指向自己构建的版本；安装和构建说明见 [README](https://github.com/swordfeng/paseo-voice-kit#readme)。
+语音服务是一个单独的原生程序。项目在 GitHub 上的 v0.1.1 版本提供了 macOS（Apple 芯片和 Intel）、Linux（x64 和 arm64）和 Windows（x64）的预构建服务程序。Voice Kit 首次启动时，会在下载适合你平台的版本前征求你的同意，说明下载来源，并按固定的校验和验证。如果拒绝，Voice Kit 会关闭，Paseo 继续使用内置语音。你也可以在“程序路径”设置中指向自己构建的版本；安装和构建说明见 [README](https://github.com/swordfeng/paseo-voice-kit#readme)。
 
-内置的 Qwen3-TTS 模型在 Voice Kit 自己的原生进程中运行。你添加的 MLX 版 Qwen3-TTS 模型在语音服务自带的原生 MLX 辅助程序中运行，无需另外安装任何东西。它们需要 Apple 芯片、macOS 14 或更高版本的 Mac，模型权重和其他模型一样单独下载。v0.1.0 版语音服务不包含这个辅助程序，使用 MLX 模型需要更新的语音服务。
+内置的 Qwen3-TTS 模型在 Voice Kit 自己的原生进程中运行。你添加的 MLX 版 Qwen3-TTS 模型在语音服务自带的原生 MLX 辅助程序中运行，无需另外安装任何东西。它们需要 Apple 芯片、macOS 14 或更高版本的 Mac，模型权重和其他模型一样单独下载。
 
 需要 Paseo 0.15.4 或更高版本，并已启用插件。目前日常使用的平台是 Apple 芯片的 macOS。每个发布平台都通过了自动化测试：构建服务程序、运行原生测试、按 Voice Kit 的方式解包，并用替代引擎检查语音服务。即将发布的 0.1.1 的源码还在全部五个平台上用真实模型在 CPU 上通过了简短检查。Windows、Linux 和 Intel Mac 上的 GPU 语音以及完整安装尚未验证。
 

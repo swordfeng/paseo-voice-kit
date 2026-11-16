@@ -458,7 +458,7 @@ impl Runtime {
                 if voices.is_empty() {
                     voices = cached_voices(&self.store, &model.id);
                 }
-                let route = route::Route::lazy(self.lazy_route(model), model.id.clone(), model.label.clone(), model.languages.clone(), None, voices);
+                let route = route::Route::lazy(self.lazy_route(model), model.id.clone(), model.label.clone(), model.languages.clone(), voices);
                 let (store, child) = (self.store.clone(), model.clone());
                 let (check_child, use_gpu) = (model.clone(), self.use_gpu());
                 models.push(Arc::new(
@@ -470,7 +470,7 @@ impl Runtime {
             let preferred = serde_json::from_value(entry.options.get("language_models").cloned().unwrap_or_else(|| json!({})))?;
             let voices = serde_json::from_value(entry.options.get("model_voices").cloned().unwrap_or_else(|| json!({})))?;
             let approximate = serde_json::from_value(entry.options.get("approximate_languages").cloned().unwrap_or_else(|| json!([])))?;
-            return Ok(Arc::new(engine::chain::ChainTts::new(models, entry.personas(), preferred, voices, approximate)));
+            return Ok(Arc::new(engine::chain::ChainTts::new(models, preferred, voices, approximate)));
         }
         load_leaf_tts(entry, &self.store, self.onnx_provider(), self.settings.threads, &self.settings.default_voice, &self.handle, self.use_gpu())
     }
@@ -1330,15 +1330,14 @@ mod tests {
         let weights = folder.join("mlx");
         std::fs::create_dir_all(&weights).unwrap();
         std::fs::write(weights.join("config.json"), r#"{"model_type":"qwen3_tts","tts_model_type":"custom_voice"}"#).unwrap();
-        let persona = |ids: &[&str]| json!([{ "id": "p", "label": "P", "gender": "female", "voices": ids.iter().map(|id| (id.to_string(), json!("v"))).collect::<serde_json::Map<_, _>>() }]);
         let file = folder.join("catalog.json");
         std::fs::write(&file, json!({ "models": [
             { "id": "custom-mlx", "kind": "tts", "label": "MLX", "engine": "mlx", "family": "qwen3_tts", "languages": ["en"],
               "path": weights.to_string_lossy(), "files": { "config": "config.json" } },
             { "id": "custom-remote-voice", "kind": "tts", "label": "Remote", "engine": "openai", "languages": ["de"],
               "remote": { "base_url": "http://127.0.0.1:9/v1", "model": "fixture" } },
-            { "id": "only-mlx", "kind": "tts", "label": "chain", "engine": "chain", "options": { "chain": ["custom-mlx"], "personas": persona(&["custom-mlx"]) } },
-            { "id": "mlx-and-remote", "kind": "tts", "label": "chain", "engine": "chain", "options": { "chain": ["custom-mlx", "custom-remote-voice"], "personas": persona(&["custom-mlx", "custom-remote-voice"]) } },
+            { "id": "only-mlx", "kind": "tts", "label": "chain", "engine": "chain", "options": { "chain": ["custom-mlx"] } },
+            { "id": "mlx-and-remote", "kind": "tts", "label": "chain", "engine": "chain", "options": { "chain": ["custom-mlx", "custom-remote-voice"] } },
         ] }).to_string()).unwrap();
         let runtime = |tts: &str| {
             let mut settings = crate::default_settings();

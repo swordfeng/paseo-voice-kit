@@ -141,7 +141,6 @@ export const ru: Messages = {
     readAs: "(с произношением: {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "Женский {{n}}",
       male: "Мужской {{n}}",

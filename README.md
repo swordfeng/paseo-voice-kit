@@ -47,7 +47,7 @@ Plugin source. Voice Kit isn't in the Paseo plugin registry or on npm.
 
 The speech server (`voicekit`) is a separate native program. Prebuilt servers for macOS
 (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the
-[v0.1.0 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0). The
+[v0.1.1 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.1). The
 first time Voice Kit needs a server version, it asks before downloading the one for your
 platform and shows where it comes from; a plugin update that needs a new server version asks
 again. The download is checked against a SHA-256 pinned in the plugin, then unpacked into
@@ -84,15 +84,12 @@ or package installation. Model weights are still downloaded separately, followin
 "Download models automatically", or read from a local model folder. Models load on
 first use and release their worker when unloaded.
 
-This is in the current source and local development build. The published 0.1.0
-speech server does not include the helper; the plugin reports when a server update
-is needed. Only Qwen3-TTS CustomVoice checkpoints with the preset voices are supported.
+The helper comes with the 0.1.1 speech server. Only Qwen3-TTS CustomVoice checkpoints
+with the preset voices are supported.
 
-With a speech server built from the current source, Qwen3-TTS voices (GGUF and MLX) follow the
-Speed setting too: Voice Kit changes the speed of the generated speech afterwards, keeping its
+Qwen3-TTS voices (GGUF and MLX) follow the Speed setting too: Voice Kit changes the speed of the generated speech afterwards, keeping its
 pitch, so the wait for generation stays the same. Other voices set their speed while
-generating. The published 0.1.0 server reads Qwen3-TTS at normal speed; 0.1.1, which includes
-this, is being prepared.
+generating.
 
 On Linux and Windows, `dev-install.sh` builds with Vulkan support by default, which
 needs Vulkan headers and `glslc`. For a CPU-only build, use

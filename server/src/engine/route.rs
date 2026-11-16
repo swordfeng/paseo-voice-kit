@@ -1,6 +1,5 @@
 //! Lazy, independently unloadable voice models used by the ordered TTS chain.
 use std::{
-    collections::BTreeMap,
     sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}},
     time::{Duration, Instant},
 };
@@ -20,8 +19,6 @@ pub struct Route {
     pub label: String,
     /// Explicit native language codes.
     pub languages: Vec<String>,
-    /// The voice every persona uses here (single-speaker models).
-    pub shared_voice: Option<String>,
     /// Voices listed while the engine is not loaded (from the catalog).
     pub catalog_voices: Vec<Voice>,
     state: Arc<RouteState>,
@@ -42,8 +39,8 @@ struct RouteState {
 
 
 impl Route {
-    pub fn lazy(load: LazyLoad, model: String, label: String, languages: Vec<String>, shared_voice: Option<String>, catalog_voices: Vec<Voice>) -> Self {
-        Self { model, label, languages, shared_voice, catalog_voices, installed: None, unrunnable: None, state: Arc::new(RouteState { engine: Mutex::new(None), lazy: Some(load), failed_at: Mutex::new(None), last_used: Mutex::new(Instant::now()), load: Mutex::new(()), failures: AtomicU32::new(0) }) }
+    pub fn lazy(load: LazyLoad, model: String, label: String, languages: Vec<String>, catalog_voices: Vec<Voice>) -> Self {
+        Self { model, label, languages, catalog_voices, installed: None, unrunnable: None, state: Arc::new(RouteState { engine: Mutex::new(None), lazy: Some(load), failed_at: Mutex::new(None), last_used: Mutex::new(Instant::now()), load: Mutex::new(()), failures: AtomicU32::new(0) }) }
     }
 
     pub fn with_installed(mut self, installed: Box<dyn Fn() -> bool + Send + Sync>) -> Self { self.installed = Some(installed); self }
@@ -121,15 +118,6 @@ impl Route {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Persona {
-    pub id: String,
-    pub label: String,
-    pub gender: String,
-    /// Route key -> voice id in that route's model.
-    pub voices: BTreeMap<String, String>,
-}
-
 /// One route's voices, for the "Custom" picker.
 #[derive(Debug, Clone, Serialize)]
 pub struct RouteVoices {
@@ -137,10 +125,6 @@ pub struct RouteVoices {
     pub label: String,
     pub model: String,
     pub voices: Vec<Voice>,
-    /// Persona id -> this route's voice in that persona (to start a custom pairing from one).
-    pub persona_voices: BTreeMap<String, String>,
-    /// Set when every persona uses this one voice here (nothing to pick).
-    pub shared_voice: Option<String>,
     /// Whether this model is loaded in memory.
     pub ready: bool,
     pub accelerator: Option<String>,
@@ -181,7 +165,7 @@ mod tests {
         let route = Route::lazy(Box::new(move || {
             loads.fetch_add(1, Ordering::SeqCst);
             Some(Ok(Arc::new(BrokenWorker)))
-        }), "broken-mlx".into(), "fixture".into(), vec!["en".into()], None, vec![]);
+        }), "broken-mlx".into(), "fixture".into(), vec!["en".into()], vec![]);
         assert!(route.engine().is_none());
         assert!(route.retry_after().is_none(), "one failed start is not a cooldown");
         assert!(route.engine().is_none());

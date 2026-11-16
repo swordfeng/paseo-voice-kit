@@ -140,7 +140,6 @@ export const ko: Messages = {
     readAs: "({{language}} 발음)",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "여성 {{n}}",
       male: "남성 {{n}}",

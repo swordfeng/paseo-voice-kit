@@ -140,7 +140,6 @@ export const es: Messages = {
     readAs: "(leído como {{language}})",
   },
   voices: {
-    persona: "{{name}} · {{gender}}",
     numbered: {
       female: "Femenina {{n}}",
       male: "Masculina {{n}}",
