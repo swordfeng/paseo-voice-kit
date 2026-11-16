@@ -5,10 +5,10 @@ import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { LANGUAGES } from "../shared/languages";
-import { hfLookupRpc, type HfLookup } from "../shared/rpc";
+import { hfLookupRpc, setModelKeyRpc, type HfLookup } from "../shared/rpc";
 import { GGUF_QWEN_FAMILY, MLX_FAMILY_VALUES, SHERPA_FAMILIES, type CustomModel } from "../shared/settings";
 import { customModelFromDraft } from "./custom-model";
-import { MlxRuntimeSetup } from "./mlx-runtime";
+import { MlxRuntimeStatus } from "./mlx-runtime";
 import { formatBytes } from "./format";
 import { errorText, languageName, languageOptionLabel, useText, type Translate } from "./i18n";
 
@@ -141,6 +141,9 @@ export function CustomModelForm({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [repoInput, setRepoInput] = useState("");
+  // The API key never goes into settings: it is sent to the daemon on its own (setModelKeyRpc).
+  const [apiKey, setApiKey] = useState("");
+  const setModelKey = useRpc(setModelKeyRpc);
   const lookupRpc = useRpc(hfLookupRpc);
   const lookup = useMutation({
     mutationFn: (repo: string) => lookupRpc({ repo }),
@@ -192,6 +195,7 @@ export function CustomModelForm({
     setTried(false);
     setSaveError(null);
     setRepoInput("");
+    setApiKey("");
     setSource("huggingface");
     lookup.reset();
   };
@@ -206,7 +210,6 @@ export function CustomModelForm({
       source: effectiveSource,
       baseUrl: draft.baseUrl?.trim() || undefined,
       model: draft.model?.trim() || undefined,
-      apiKey: draft.apiKey?.trim() || undefined,
       voice: kind === "tts" ? draft.voice?.trim() || undefined : undefined,
       location: draft.location?.trim() || undefined,
       family:
@@ -229,7 +232,12 @@ export function CustomModelForm({
     // Keep everything entered until the model is actually saved.
     setSaving(true);
     setSaveError(null);
-    const failure = await onSave(model).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+    const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+    const key = effectiveSource === "server" ? apiKey.trim() : "";
+    // Save the key first, so the server finds it as soon as the model appears in settings.
+    const keyFailure = key ? await setModelKey({ id: model.id, apiKey: key }).then(() => null, message) : null;
+    if (key && !keyFailure) model.hasApiKey = true;
+    const failure = keyFailure ?? (await onSave(model).catch(message));
     setSaving(false);
     if (failure === null) reset();
     else setSaveError(failure);
@@ -322,7 +330,7 @@ export function CustomModelForm({
             <>
               <SettingsInput label={t("form.baseUrl")} hint={t("form.baseUrlHint")} placeholder="http://127.0.0.1:8000/v1" onChangeText={(baseUrl) => set({ baseUrl })} />
               <SettingsInput label={t("form.modelName")} placeholder={kind === "stt" ? "whisper-1" : "tts-1"} onChangeText={(model) => set({ model })} />
-              <SettingsInput label={t("form.apiKey")} hint={t("form.apiKeyHint")} secureTextEntry onChangeText={(apiKey) => set({ apiKey })} />
+              <SettingsInput label={t("form.apiKey")} hint={t("form.apiKeyHint")} secureTextEntry onChangeText={setApiKey} />
               {kind === "tts" ? <SettingsInput label={t("form.voiceName")} hint={t("form.voiceNameHint")} onChangeText={(voice) => set({ voice })} /> : null}
             </>
           ) : (
@@ -353,9 +361,11 @@ export function CustomModelForm({
           )}
           {kind === "tts" && !qwen ? <LanguagePicker theme={theme} value={draft.languages ?? []} onChange={(languages) => set({ languages })} /> : null}
           {found?.suggestion.source === "mlx" || MLX_FAMILY_VALUES.has(draft.family ?? "") ? (
-            <View style={{ gap: 6, paddingHorizontal: 4 }}>
+            <View style={{ gap: 6 }}>
               <Text style={styles.note}>{t("form.mlxNote")}</Text>
-              <MlxRuntimeSetup theme={theme} showReady />
+              <View style={{ paddingHorizontal: 4 }}>
+                <MlxRuntimeStatus theme={theme} showReady />
+              </View>
             </View>
           ) : null}
           {tried && problem ? <Text style={styles.error}>{problem}</Text> : null}

@@ -46,7 +46,8 @@ try {
   await weights(local, "different fixture"); await manager.adopt(); assert(await exists(join(local, spec.dir)), "keep differing private files");
   await manager.remove(id); await manager.adopt();
   assert(!(await exists(join(root, spec.dir))), "retained differing files cannot resurrect a deleted model");
-  await rm(join(local, spec.dir), { recursive: true }); await rm(join(root, spec.dir), { recursive: true, force: true });
+  assert(!(await exists(join(local, spec.dir))), "removing the model also removes its older private copy");
+  await rm(join(local, spec.dir), { recursive: true, force: true }); await rm(join(root, spec.dir), { recursive: true, force: true });
   await rm(join(local, ".paseo-shared-history"), { recursive: true, force: true });
   await weights(local); busy = true; await manager.adopt(); assert(await exists(join(local, spec.dir))); assert(!(await exists(join(root, spec.dir))), "do not adopt over an active Paseo download");
   busy = false; await mkdir(join(root, ".downloads"), { recursive: true }); await writeFile(join(root, ".downloads", spec.dir + ".tar.bz2"), "unfinished archive");

@@ -4,8 +4,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { execCommand, spawnProcess, terminateProcess } from "@getpaseo/plugin/server";
 import type { Engine, Phase, Notice } from "../shared/rpc";
-import { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired, type InstallProgress, type ResolvedBinary } from "./binary";
+import { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired, ServerVersionMismatch, type InstallProgress, type ResolvedBinary } from "./binary";
 import { paths } from "./paths";
+import { SERVER_VERSION } from "../shared/release";
 
 export interface ServerConfig {
   binaryPath: string;
@@ -19,7 +20,8 @@ export interface ServerConfig {
   vocabulary: string;
   accelerator: "auto" | "cpu";
   autoDownload: boolean;
-  runtimeDownloadApproved: boolean;
+  /** SHA-256 of the server archive the user approved downloading, or "". */
+  approvedServerArchive: string;
   idleUnloadMinutes: number;
   neuralEngine: boolean;
   /** Custom models catalog file, and a hash of its content (so edits restart the server). */
@@ -117,6 +119,8 @@ export class Supervisor {
   private lifetime = new AbortController();
   private readonly logs: string[] = [];
   private runToken: string | null = null;
+  /** How long a restart lets in-flight requests finish (SUP-5); shorter in tests. */
+  private drainMs = 15_000;
 
   constructor(private readonly onChange: (snapshot: SupervisorSnapshot) => void) {}
 
@@ -148,12 +152,12 @@ export class Supervisor {
    * The initial listening model selection may measure this machine with it first.
    * Shows install progress while nothing runs.
    */
-  async prepareBinary(binaryPath: string, message: string | null = null, notice: Notice | null = null, allowDownload = false, signal?: AbortSignal): Promise<ResolvedBinary> {
+  async prepareBinary(binaryPath: string, message: string | null = null, notice: Notice | null = null, approvedArchive = "", signal?: AbortSignal): Promise<ResolvedBinary> {
     // Leave the phase alone while a server runs or a crash restart is pending.
     const idle = !this.child && !this.restartTimer;
     if (idle) this.update({ phase: "installing", message, notice, install: null });
     const waiting = signal ?? this.lifetime.signal;
-    const binary = await resolveBinary(binaryPath, (install) => idle && !waiting.aborted && !this.lifetime.signal.aborted && this.update({ install }), this.lifetime.signal, allowDownload, waiting);
+    const binary = await resolveBinary(binaryPath, (install) => idle && !waiting.aborted && !this.lifetime.signal.aborted && this.update({ install }), this.lifetime.signal, approvedArchive, waiting);
     if (idle && !waiting.aborted && !this.lifetime.signal.aborted) this.update({ install: null, binary });
     return binary;
   }
@@ -227,10 +231,10 @@ export class Supervisor {
     this.update({ phase: "installing", message: null, health: null, install: null });
     let binary: ResolvedBinary;
     try {
-      binary = await resolveBinary(config.binaryPath, (install) => !cancelledBeforeSpawn() && this.update({ install }), this.lifetime.signal, config.runtimeDownloadApproved, waitSignal);
+      binary = await resolveBinary(config.binaryPath, (install) => !cancelledBeforeSpawn() && this.update({ install }), this.lifetime.signal, config.approvedServerArchive, waitSignal);
     } catch (error) {
       if (cancelledBeforeSpawn()) return;
-      this.update({ phase: "failed", message: error instanceof Error ? error.message : String(error), notice: error instanceof RuntimeDownloadRequired ? { code: "runtimeDownloadRequired", url: error.url } : null, install: null });
+      this.update({ phase: "failed", message: error instanceof Error ? error.message : String(error), notice: startNotice(error), install: null });
       return;
     }
     if (cancelledBeforeSpawn()) return;
@@ -456,10 +460,11 @@ export class Supervisor {
     child.stdin.end(); // voicekit exits on stdin EOF (works on every OS)
     if (process.platform !== "win32") child.kill("SIGTERM");
     // Paseo may end this plugin process soon after cleanup starts, so do not wait long.
-    // Configuration updates drain current HTTP requests before changing model files/processes.
+    // Configuration updates let current requests finish for at most 15 s (usually far less:
+    // the server exits as soon as nothing is in flight), then the old server is stopped.
     // Cleanup still stays short because Paseo can end a plugin subprocess immediately.
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<"timeout">((resolve) => { timer=setTimeout(() => resolve("timeout"), drain ? 185_000 : 1500); });
+    const timeout = new Promise<"timeout">((resolve) => { timer=setTimeout(() => resolve("timeout"), drain ? this.drainMs : 1500); });
     const result=await Promise.race([exited, timeout]);
     if(timer)clearTimeout(timer);
     if (result === "timeout") {
@@ -506,24 +511,54 @@ export class Supervisor {
   }
 }
 
-/** voicekit servers (any binary) started for this plugin's models folder. Unix only. */
+/** Every `voicekit.exe` with its pid and command line, one per line (Windows has no `ps`). */
+const WINDOWS_PROCESS_LIST =
+  "Get-CimInstance Win32_Process -Filter \"Name='voicekit.exe'\" | ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }";
+
+/** voicekit servers (any binary) started for this plugin's models folder. */
 async function findOurServers(): Promise<number[]> {
-  if (process.platform === "win32") return [];
   try {
-    const { stdout } = await execCommand("ps", ["-axo", "pid=,command="], { timeout: 3000, shell: false, maxBuffer: 8 * 1024 * 1024 });
-    const marker = "--models-dir " + paths.models;
-    return stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => /voicekit(\.exe)? serve /.test(line) && line.includes(marker))
-      .map((line) => Number(line.split(/\s+/, 1)[0]))
-      .filter((pid) => Number.isInteger(pid) && pid > 1);
+    const options = { timeout: 10_000, shell: false, maxBuffer: 8 * 1024 * 1024 };
+    const windows = process.platform === "win32";
+    const { stdout } = windows
+      ? await execCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROCESS_LIST], options)
+      : await execCommand("ps", ["-axo", "pid=,command="], options);
+    return ourServerPids(stdout, paths.models, windows);
   } catch {
     return [];
   }
 }
 
-/** Guard against pid reuse: only signal a process that is actually voicekit. */
+/**
+ * Pids in a "<pid> <command line>" listing that run `voicekit serve` for `modelsDir`. Windows
+ * command lines can quote the executable and the folder, and its paths compare without case.
+ */
+export function ourServerPids(listing: string, modelsDir: string, windows = false): number[] {
+  const fold = (text: string) => (windows ? text.toLowerCase() : text);
+  const markers = [`--models-dir ${modelsDir}`, `--models-dir "${modelsDir}"`].map(fold);
+  const pids: number[] = [];
+  for (const raw of listing.split(/\r?\n/)) {
+    const match = /^(\d+)\s+(.*)$/.exec(raw.trim());
+    if (!match) continue;
+    const [, pid, command] = match;
+    if (!/voicekit(\.exe)?"?\s+serve\s/i.test(command)) continue;
+    // The folder must end there: "--models-dir /a/models" is not "--models-dir /a/models-old".
+    const folded = fold(command);
+    const endsAt = (marker: string, from: number): boolean => {
+      const at = folded.indexOf(marker, from);
+      return at >= 0 && (/\s/.test(folded[at + marker.length] ?? " ") || endsAt(marker, at + 1));
+    };
+    if (!markers.some((marker) => endsAt(marker, 0))) continue;
+    const value = Number(pid);
+    if (Number.isInteger(value) && value > 1) pids.push(value);
+  }
+  return pids;
+}
+
+/**
+ * Guard against pid reuse: only signal a process that is actually voicekit. On Windows the full
+ * scan in `findOurServers` covers the pid file's server, so the pid file alone is not trusted.
+ */
 async function looksLikeVoicekit(pid: number): Promise<boolean> {
   if (process.platform === "win32") return false;
   try {
@@ -532,6 +567,13 @@ async function looksLikeVoicekit(pid: number): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Startup errors the client presents itself: download approval and a server of another version. */
+function startNotice(error: unknown): Notice | null {
+  if (error instanceof RuntimeDownloadRequired) return { code: "runtimeDownloadRequired", url: error.url, sha256: error.sha256, version: error.version };
+  if (error instanceof ServerVersionMismatch) return { code: "serverVersionMismatch", version: error.found ?? undefined, required: SERVER_VERSION, source: error.source };
+  return null;
 }
 
 function firstError(health: Health): string | null {

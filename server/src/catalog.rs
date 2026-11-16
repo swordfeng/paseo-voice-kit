@@ -176,16 +176,22 @@ impl ModelEntry {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
+        // Starting with a letter or digit rules out "." and "..", which would name the models
+        // folder or its parent when the model's own folder is derived from the id.
         anyhow::ensure!(
-            !self.id.is_empty() && self.id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
-            "model id {:?} must be letters, digits, '-', '_' or '.'",
+            self.id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) && self.id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+            "model id {:?} must start with a letter or digit and use only letters, digits, '-', '_' or '.'",
             self.id
         );
         if let Some(dir) = &self.dir {
             anyhow::ensure!(!dir.contains("..") && !dir.contains('/') && !dir.contains('\\'), "model {}: bad dir", self.id);
         }
-        for f in self.files.values().flat_map(|v| v.split(',')) {
-            anyhow::ensure!(!f.contains(".."), "model {}: file paths may not contain '..'", self.id);
+        for f in self.files.values().flat_map(|v| v.split(',')).map(str::trim) {
+            anyhow::ensure!(
+                !f.contains("..") && !f.starts_with('/') && !f.starts_with('\\') && !f.contains(':') && !Path::new(f).is_absolute(),
+                "model {}: file paths must be relative to the model folder",
+                self.id
+            );
         }
         match self.engine {
             Engine::Openai => anyhow::ensure!(self.remote.is_some(), "model {}: openai engine needs `remote`", self.id),
@@ -351,6 +357,11 @@ impl Store {
     /// The CoreML encoder whisper.cpp would load for this entry, if any.
     pub fn coreml_dir(&self, entry: &ModelEntry) -> Option<PathBuf> {
         let installed = self.locate(entry)?;
+        // The encoder is unpacked next to the model. Folders Voice Kit borrows (Paseo's models,
+        // the user's own) are never written, so their models run without one.
+        if !installed.root.starts_with(&self.models_dir) {
+            return None;
+        }
         let model = installed.file(entry, "model")?;
         Some(coreml_encoder_path(&model))
     }
@@ -402,12 +413,15 @@ impl Store {
 /// can add a model by pointing at a folder or archive and naming its family.
 pub fn autodetect(family: &str, root: &Path) -> Option<BTreeMap<String, String>> {
     let names: Vec<String> = std::fs::read_dir(root).ok()?.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    // A Git LFS pointer (about 130 bytes) is not a model, even when named like one.
+    let real = |name: &str| std::fs::metadata(root.join(name)).is_ok_and(|m| m.len() >= 1024);
     // Prefer int8 when both precisions ship (smaller, same quality for these families).
-    let onnx = |prefix: &str| -> Option<String> {
-        let mut c: Vec<&String> = names.iter().filter(|n| n.starts_with(prefix) && n.ends_with(".onnx")).collect();
+    let model = |prefix: &str, extensions: &[&str]| -> Option<String> {
+        let mut c: Vec<&String> = names.iter().filter(|n| n.starts_with(prefix) && extensions.iter().any(|e| n.ends_with(e)) && real(n)).collect();
         c.sort_by_key(|n| (!n.contains("int8"), n.len()));
         c.first().map(|s| s.to_string())
     };
+    let onnx = |prefix: &str| model(prefix, &[".onnx"]);
     let has = |name: &str| names.iter().any(|n| n == name).then(|| name.to_string());
     let fsts: Vec<String> = names.iter().filter(|n| n.ends_with(".fst")).cloned().collect();
     let lexicons: Vec<String> = names.iter().filter(|n| n.starts_with("lexicon") && n.ends_with(".txt")).cloned().collect();
@@ -432,6 +446,19 @@ pub fn autodetect(family: &str, root: &Path) -> Option<BTreeMap<String, String>>
             put("decoder", onnx("decoder"))?;
             put("tokens", has("tokens.txt"))?;
         }
+        "moonshine" => {
+            if let Some(merged) = model("decoder_model_merged", &[".onnx", ".ort"]).or_else(|| model("merged_decode", &[".onnx", ".ort"])) {
+                // Moonshine v2: an encoder and one merged decoder.
+                put("encoder", model("encoder", &[".onnx", ".ort"]).or_else(|| model("encode", &[".onnx", ".ort"])))?;
+                put("merged_decoder", Some(merged))?;
+            } else {
+                put("preprocessor", onnx("preprocess"))?;
+                put("encoder", onnx("encode"))?;
+                put("uncached_decoder", onnx("uncached_decode"))?;
+                put("cached_decoder", onnx("cached_decode"))?;
+            }
+            put("tokens", has("tokens.txt"))?;
+        }
         "qwen3_asr" => {
             put("conv_frontend", onnx("conv_frontend"))?;
             put("encoder", onnx("encoder"))?;
@@ -454,6 +481,8 @@ pub fn autodetect(family: &str, root: &Path) -> Option<BTreeMap<String, String>>
                 put("lexicon", Some(lexicons.join(",")));
             }
             put("dict_dir", has("dict"));
+            // Marks a model that needs espeak-ng phonemes (Piper), which sherpa-onnx 2.0 no longer
+            // provides; loading refuses it with that reason.
             put("data_dir", has("espeak-ng-data"));
         }
         _ => return None,
@@ -527,16 +556,50 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vk-auto-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join("dict")).unwrap();
         for f in ["model.onnx", "model.int8.onnx", "tokens.txt", "voices.bin", "lexicon-zh.txt", "lexicon-us-en.txt", "date-zh.fst"] {
-            std::fs::write(tmp.join(f), "x").unwrap();
+            std::fs::write(tmp.join(f), vec![b'x'; 2048]).unwrap();
         }
         let sv = autodetect("sense_voice", &tmp).unwrap();
         assert_eq!(sv["model"], "model.int8.onnx");
+        // A Git LFS pointer named like the preferred file is skipped for the real model.
+        std::fs::write(tmp.join("model.int8.onnx"), "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n").unwrap();
+        assert_eq!(autodetect("sense_voice", &tmp).unwrap()["model"], "model.onnx");
         let k = autodetect("kokoro", &tmp).unwrap();
         assert_eq!(k["voices"], "voices.bin");
         assert!(k["lexicon"].contains("lexicon-zh.txt"));
         assert_eq!(k["rule_fsts"], "date-zh.fst");
         assert!(autodetect("transducer", &tmp).is_none());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn autodetect_finds_both_moonshine_layouts() {
+        let tmp = std::env::temp_dir().join(format!("vk-moonshine-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        for f in ["preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx", "cached_decode.int8.onnx", "tokens.txt"] {
+            std::fs::write(tmp.join(f), vec![b'x'; 2048]).unwrap();
+        }
+        let v1 = autodetect("moonshine", &tmp).unwrap();
+        assert_eq!(v1["preprocessor"], "preprocess.onnx");
+        assert_eq!(v1["uncached_decoder"], "uncached_decode.int8.onnx");
+        std::fs::remove_dir_all(&tmp).unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
+        for f in ["encoder_model.ort", "decoder_model_merged.ort", "tokens.txt"] {
+            std::fs::write(tmp.join(f), vec![b'x'; 2048]).unwrap();
+        }
+        let v2 = autodetect("moonshine", &tmp).unwrap();
+        assert_eq!((v2["encoder"].as_str(), v2["merged_decoder"].as_str()), ("encoder_model.ort", "decoder_model_merged.ort"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn ids_and_file_paths_cannot_leave_the_models_folder() {
+        let entry = |id: &str, file: &str| -> ModelEntry {
+            serde_json::from_value(serde_json::json!({"id": id, "kind": "stt", "label": "x", "engine": "whisper", "files": {"model": file}})).unwrap()
+        };
+        assert!(entry("whisper-ok.v2", "sub/a.bin").validate().is_ok());
+        for (id, file) in [(".", "a.bin"), ("..", "a.bin"), (".hidden", "a.bin"), ("ok", "/etc/passwd"), ("ok", "C:\\x.bin"), ("ok", "\\\\server\\x"), ("ok", "../x.bin"), ("ok", "a.bin, /abs")] {
+            assert!(entry(id, file).validate().is_err(), "{id} {file}");
+        }
     }
 
     #[test]
@@ -611,6 +674,21 @@ mod tests {
         }
         let store = Store { models_dir: tmp.join("own"), reuse_dirs: vec![tmp.join("reuse")], shared_models_dir: None, paseo_managed: false };
         assert!(store.locate(entry).unwrap().shared);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn borrowed_models_get_no_core_ml_encoder() {
+        let tmp = std::env::temp_dir().join(format!("vk-coreml-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        let entry: ModelEntry = serde_json::from_value(serde_json::json!({"id": "whisper-fixture", "kind": "stt", "label": "x", "engine": "whisper", "files": {"model": "ggml-x.bin"}})).unwrap();
+        let store = Store { models_dir: tmp.join("own"), reuse_dirs: vec![tmp.join("reuse")], shared_models_dir: None, paseo_managed: false };
+        std::fs::create_dir_all(tmp.join("reuse").join(entry.dir_name())).unwrap();
+        std::fs::write(tmp.join("reuse").join(entry.dir_name()).join("ggml-x.bin"), "x").unwrap();
+        assert!(store.coreml_dir(&entry).is_none(), "nothing is unpacked into a borrowed folder");
+        std::fs::create_dir_all(store.own_dir(&entry)).unwrap();
+        std::fs::write(store.own_dir(&entry).join("ggml-x.bin"), "x").unwrap();
+        assert!(store.coreml_dir(&entry).unwrap().starts_with(tmp.join("own")));
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

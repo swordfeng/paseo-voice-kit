@@ -45,30 +45,36 @@ const { SpeechSwitch } = await import("../plugin/server/speech-switch.ts");
 const { loadState } = await import("../plugin/server/state.ts");
 const sw = new SpeechSwitch(await loadState());
 const K = "http://127.0.0.1:47615/v1";
-const desired = (token: string | null, voice = "female-higher") => ({
+const desired = (token: string | null, ttsModel = "voicekit-tts-chain") => ({
   wanted: { dictation: true, voiceInput: true, voiceOutput: true },
-  model: { dictation: "whisper", voiceInput: "whisper", voiceOutput: "voicekit-tts-chain" },
+  model: { dictation: "whisper", voiceInput: "whisper", voiceOutput: ttsModel },
   waiting: { dictation: null, voiceInput: null, voiceOutput: null },
-  voice, baseUrl: token ? K : null, token: token ?? "",
+  voice: "voicekit", baseUrl: token ? K : null, token: token ?? "",
 });
 let failures = 0;
 const check = (name: string, ok: boolean, extra?: unknown) => { console.log((ok ? "PASS " : "FAIL ") + name + (ok ? "" : " " + JSON.stringify(extra))); if (!ok) failures++; };
 const tts = () => read().features.voiceMode.tts;
 const dict = () => read().features.dictation.stt;
 const st = (site: string) => sw.siteStatuses.find((s: any) => s.site === site);
+const editTts = (patch: Record<string, unknown>) => write({ ...read(), features: { ...read().features, voiceMode: { ...read().features.voiceMode, tts: { ...tts(), ...patch } } } });
 
 sw.attach(paseo);
 sw.setDesired(desired("T1")); await sw.reconcile();
-check("1 takes over all sites", tts().baseUrl === K && tts().apiKey === "T1" && tts().voice === "female-higher" && dict().baseUrl === K, read().features);
+check("1 takes over all sites", tts().baseUrl === K && tts().apiKey === "T1" && tts().voice === "voicekit" && dict().baseUrl === K, read().features);
 
-// User picks another voice in Settings > Voice, keeping Voice Kit's server.
-write({ ...read(), features: { ...read().features, voiceMode: { ...read().features.voiceMode, tts: { ...tts(), voice: "M3" } } } });
+// Voices are chosen per model in Voice Kit: a voice changed in Settings > Voice is not a takeover.
+editTts({ voice: "M3" });
 await sw.reconcile();
-check("2 voice edit is kept, not reverted", tts().voice === "M3" && tts().baseUrl === K, tts());
+check("2a a voice edit alone is not a takeover", st("voiceOutput")?.state === "active" && tts().baseUrl === K, [tts(), st("voiceOutput")]);
+
+// User picks another model in Settings > Voice, keeping Voice Kit's server.
+editTts({ model: "user-model" });
+await sw.reconcile();
+check("2 model edit is kept, not reverted", tts().model === "user-model" && tts().baseUrl === K, tts());
 check("2 shows as changed by user", st("voiceOutput")?.state === "override", st("voiceOutput"));
 
 sw.setDesired(desired("T2")); await sw.reconcile();
-check("3 server restart refreshes the key, keeps the voice", tts().apiKey === "T2" && tts().voice === "M3", tts());
+check("3 server restart refreshes the key, keeps the model", tts().apiKey === "T2" && tts().model === "user-model", tts());
 check("3 managed sites get the new key", dict().apiKey === "T2", dict());
 
 sw.setDesired(desired(null)); await sw.reconcile();
@@ -76,23 +82,23 @@ check("4 server down: edited site back to real OpenAI with its key", tts().baseU
 check("4 server down: dictation back to local", dict().provider === "local" && dict().model === "sense-voice", dict());
 
 sw.setDesired(desired("T3")); await sw.reconcile();
-check("5 server back: user's voice on Voice Kit again", tts().baseUrl === K && tts().voice === "M3" && tts().apiKey === "T3", tts());
+check("5 server back: user's model on Voice Kit again", tts().baseUrl === K && tts().model === "user-model" && tts().apiKey === "T3", tts());
 
 await sw.reclaim("voiceOutput");
-check("6 Use Voice Kit: plugin voice again", tts().voice === "female-higher" && st("voiceOutput")?.state === "active", [tts(), st("voiceOutput")]);
+check("6 Use Voice Kit: plugin model again", tts().model === "voicekit-tts-chain" && st("voiceOutput")?.state === "active", [tts(), st("voiceOutput")]);
 sw.setDesired(desired(null)); await sw.reconcile();
 check("6 then server down: still restores real OpenAI", tts().baseUrl === OPENAI.baseUrl && tts().apiKey === "sk-real", tts());
 
 // A failed write must not look like a user edit.
 sw.setDesired(desired("T4")); await sw.reconcile();
 failNext = true;
-sw.setDesired(desired("T4", "male-deep")); await sw.reconcile();
-check("7 failed write leaves old voice", tts().voice === "female-higher", tts());
+sw.setDesired(desired("T4", "voicekit-other")); await sw.reconcile();
+check("7 failed write leaves old model", tts().model === "voicekit-tts-chain", tts());
 await sw.reconcile();
-check("7 next pass retries, not an override", tts().voice === "male-deep" && st("voiceOutput")?.state === "active", [tts(), st("voiceOutput")]);
+check("7 next pass retries, not an override", tts().model === "voicekit-other" && st("voiceOutput")?.state === "active", [tts(), st("voiceOutput")]);
 
 // Edit, then move the site somewhere else entirely.
-write({ ...read(), features: { ...read().features, voiceMode: { ...read().features.voiceMode, tts: { ...tts(), voice: "F2" } } } });
+editTts({ model: "user-model-2" });
 await sw.reconcile();
 write({ ...read(), features: { ...read().features, voiceMode: { ...read().features.voiceMode, tts: { provider: "local", model: "kokoro" } } } });
 await sw.reconcile();
@@ -187,5 +193,56 @@ check("19 accepted pending takeover finalizes after restart without rewriting", 
 const external = read(); external.features.dictation.stt.model = "user-model"; write(external);
 await recoveredSwitch.reconcile();
 check("19 a later real edit remains an override", dict().model === "user-model" && recoveredSwitch.siteStatuses[0]?.state === "override");
+
+// State file damaged while Voice Kit owned every site: the file is kept aside, never overwritten in
+// place, and Paseo's settings that still point at an old Voice Kit server are recognized as Voice
+// Kit's own, not as the user's settings to restore.
+{
+  const { readdirSync, chmodSync } = await import("node:fs");
+  const statePath = join(home, "plugin-data/voice-kit/state.json");
+  const OLD = "http://127.0.0.1:50123/v1";
+  const stale = (model: string, voice?: string) => ({ provider: "openai", baseUrl: OLD, apiKey: "vk_stale", model, ...(voice ? { voice } : {}) });
+  write({ providers: { local: { modelsDir: "/fixture" } }, features: { dictation: { stt: stale("whisper") }, voiceMode: { stt: stale("whisper"), tts: stale("voicekit-tts-chain", "female-higher") } } });
+  writeFileSync(statePath, "{ not json");
+  const lost = await loadState();
+  const backups = readdirSync(join(home, "plugin-data/voice-kit")).filter((f) => f.startsWith("state.json.corrupt-"));
+  check("20 damaged state is kept aside and replaced", backups.length === 1 && readFileSync(join(home, "plugin-data/voice-kit", backups[0]), "utf8") === "{ not json" && Object.keys(lost.managed).length === 0, backups);
+  const orphan = new SpeechSwitch(lost);
+  orphan.attach(paseo);
+  orphan.setDesired(desired("vk_new")); await orphan.reconcile();
+  check("20 Voice Kit takes its stale sites over again", tts().baseUrl === K && tts().apiKey === "vk_new" && dict().apiKey === "vk_new", read().features);
+  check("20 a stale Voice Kit site is never saved as the user's setting", Object.values(lost.previous).every((p: any) => !p || p.apiKey !== "vk_stale"), lost.previous);
+  orphan.setDesired(desired(null)); await orphan.reconcile();
+  check("20 server down: built-in speech, not the dead address", tts().provider === "local" && dict().provider === "local" && !tts().apiKey, read().features);
+  await orphan.releaseAll();
+
+  // Damaged state while Voice Kit is off: stale sites go back to built-in speech right away.
+  write({ providers: { local: { modelsDir: "/fixture" } }, features: { dictation: { stt: stale("whisper") }, voiceMode: { stt: { provider: "local", model: "sense-voice" }, tts: OPENAI } } });
+  const off = new SpeechSwitch({ previous: {}, managed: {}, overrides: {}, edited: {} });
+  off.attach(paseo); await off.reconcile();
+  check("21 stale site restored while off; the user's own sites untouched", dict().provider === "local" && tts().baseUrl === OPENAI.baseUrl && tts().apiKey === "sk-real", read().features);
+
+  // A state file that can't be read is an error, never replaced.
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    writeFileSync(statePath, JSON.stringify({ previous: { voiceOutput: OPENAI }, managed: {}, overrides: {}, edited: {} }));
+    chmodSync(statePath, 0o000);
+    const error = await loadState().then(() => null, (e) => e);
+    chmodSync(statePath, 0o600);
+    check("22 unreadable state is an error and stays as it was", error?.code === "EACCES" && JSON.parse(readFileSync(statePath, "utf8")).previous.voiceOutput.apiKey === "sk-real", error?.code);
+  }
+}
+// SITE-7: a setting an environment variable sets on the daemon is shown as locked and never written.
+{
+  const lockedTts = { provider: "local", model: "kokoro" };
+  write({ providers: { local: { modelsDir: "/fixture" } }, envOverrides: { "features.voiceMode.tts.provider": "PASEO_VOICE_TTS_PROVIDER" }, features: { dictation: { stt: { provider: "local", model: "sense-voice" } }, voiceMode: { stt: { provider: "local", model: "sense-voice" }, tts: lockedTts } } });
+  const locked = new SpeechSwitch({ previous: {}, managed: {}, overrides: {}, edited: {} });
+  locked.attach(paseo);
+  locked.setDesired(desired("vk_locked")); await locked.reconcile();
+  const status = locked.siteStatuses.find((s: any) => s.site === "voiceOutput");
+  check("23 an environment-locked setting is left alone", JSON.stringify(tts()) === JSON.stringify(lockedTts), tts());
+  check("23 and shown as locked by that variable", status?.state === "locked" && status?.reason?.variable === "PASEO_VOICE_TTS_PROVIDER", status);
+  check("23 the other settings are still taken over", dict().baseUrl === K, dict());
+  await locked.releaseAll();
+}
 console.log(failures ? failures + " FAILED" : "all passed");
 process.exitCode = failures ? 1 : 0;

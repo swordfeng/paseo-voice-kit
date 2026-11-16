@@ -10,7 +10,7 @@ Voice Kit 会在守护进程旁启动一个小型原生语音服务（voicekit�
 
 语音服务是一个单独的原生程序。项目在 GitHub 上的 v0.1.0 版本提供了 macOS（Apple 芯片和 Intel）、Linux（x64 和 arm64）和 Windows（x64）的预构建服务程序。Voice Kit 首次启动时，会在下载适合你平台的版本前征求你的同意，说明下载来源，并按固定的校验和验证。如果拒绝，Voice Kit 会关闭，Paseo 继续使用内置语音。你也可以在“程序路径”设置中指向自己构建的版本；安装和构建说明见 [README](https://github.com/swordfeng/paseo-voice-kit#readme)。
 
-内置的 Qwen3-TTS 模型在 Voice Kit 自己的原生进程中运行。只有你添加的 MLX 版 Qwen3-TTS 模型使用 Python：它们需要 Apple 芯片、macOS 14 或更高版本的 Mac、Python 3.12 以及 MLX 运行环境。添加这类模型时，Voice Kit 会提供安装该环境的入口并先征求你的同意；它从 PyPI 安装 Python 包（按固定哈希校验），不安装 Python 本身，未经你确认不会安装任何东西。
+内置的 Qwen3-TTS 模型在 Voice Kit 自己的原生进程中运行。你添加的 MLX 版 Qwen3-TTS 模型在语音服务自带的原生 MLX 辅助程序中运行，无需另外安装任何东西。它们需要 Apple 芯片、macOS 14 或更高版本的 Mac，模型权重和其他模型一样单独下载。v0.1.0 版语音服务不包含这个辅助程序，使用 MLX 模型需要更新的语音服务。
 
 需要 Paseo 0.15.4 或更高版本，并已启用插件。目前日常使用的平台是 Apple 芯片的 macOS。每个发布平台都通过了自动化测试：构建服务程序、运行原生测试、按 Voice Kit 的方式解包，并用替代引擎检查语音服务。即将发布的 0.1.1 的源码还在全部五个平台上用真实模型在 CPU 上通过了简短检查。Windows、Linux 和 Intel Mac 上的 GPU 语音以及完整安装尚未验证。
 
@@ -19,7 +19,7 @@ Voice Kit 会在守护进程旁启动一个小型原生语音服务（voicekit�
 默认设置无需更改即可支持多种语言：
 
 - 听：Voice Kit 会为这台机器选定一次默认的多语言模型，听写和语音模式都使用它，直到你选择其他模型；你的选择之后保持不变。在 Mac 上是在 GPU 上运行的 Whisper turbo（约 100 种语言，带标点）。在 Linux 和 Windows 上，Voice Kit 会检查一次 GPU，足够快就使用 Whisper turbo，否则在 CPU 上使用 Qwen3-ASR（约 30 种语言）。听写和语音模式也可以分别选择不同的模型。
-- 说：你可以选择使用哪些语音模型以及它们的顺序；每句话使用列表中第一个原生会说该语言的已启用模型。新安装只启用 Supertonic 3（31 种语言，在 CPU 上运行）。Qwen3-TTS 0.6B 和 1.7B 支持 10 种语言；它们是可选的，启用后才下载，有 GPU 时使用 GPU（GPU 只在 Apple 芯片的 Mac 上测试过；即将发布的 0.1.1 还在全部五个平台上通过了简短的 CPU 检查）。如果回复中有已启用模型都不会说的语言，整条回复会被拒绝，而不是用错误的发音读出，页面会说明哪个模型会说它。可从六个声音（Mia、Lena、Nora、Leo、Kai、Owen）中选择，每个声音在各模型中搭配相近的声音；也可以按模型自己选择。
+- 说：你可以选择使用哪些语音模型以及它们的顺序；每句话使用列表中第一个原生会说该语言的已启用模型。新安装只启用 Supertonic 3（31 种语言，在 CPU 上运行）。Qwen3-TTS 0.6B 和 1.7B 支持 10 种语言；它们是可选的，启用后才下载，有 GPU 时使用 GPU（GPU 只在 Apple 芯片的 Mac 上测试过；即将发布的 0.1.1 还在全部五个平台上通过了简短的 CPU 检查）。如果回复中有已启用模型都不会说的语言，整条回复会被拒绝，而不是用错误的发音读出，页面会说明哪个模型会说它。每个语音模型有自己的声线，可在它的卡片上选择和试听；默认情况下 Supertonic 3 和 Qwen3-TTS 使用两个相近的声线，中英混读听起来像同一个人。
 - 其他选择：适合欧洲语言的 Parakeet v3、适合亚洲和中东语言的 Dolphin small、SenseVoice 和 Whisper small。每张模型卡片都会说明它擅长什么以及有哪些局限。
 
 模型下载到 `~/.paseo/plugin-data/voice-kit/models`，并按固定的校验和验证。除非关闭“自动下载模型”，选择模型后会立即下载。Parakeet v3 和 SenseVoice 与 Paseo 共用同一份文件：只下载一次，两边都能看到，移除时 Paseo 那边也会一起移除。下载的模型保留各自的许可证，见 MODEL_LICENSES.md；Supertonic 3 的 OpenRAIL-M 许可证包含使用限制。

@@ -12,6 +12,9 @@ use serde::Serialize;
 
 use crate::audio::Pcm;
 
+mod qwen;
+use qwen::{request as qwen_request, request_deadline as qwen_request_deadline, speak_chunk as qwen_speak_chunk, text_chunks, worker_error as qwen_worker_error, Health as QwenHealth, Sampling as QwenSampling};
+
 /// The engine itself can't serve requests right now (its server is unreachable, rejects
 /// the configured credentials, or is overloaded), as opposed to a problem with one request.
 /// The runtime marks the model unavailable so the plugin falls back, then reconnects in the
@@ -30,6 +33,36 @@ impl std::error::Error for Unavailable {}
 /// Whether `error` means the engine is unavailable rather than one request failing.
 pub fn is_unavailable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Unavailable>().is_some()
+}
+
+/// One request failed for its own input (the worker reported the error and keeps running).
+/// Unlike a crash or a timeout this says nothing about later requests, so it never unloads the
+/// model or starts a cooldown.
+#[derive(Debug)]
+pub struct RequestFailure {
+    /// Machine-readable cause when the worker gives one, such as `token_limit`.
+    pub code: Option<String>,
+    pub message: String,
+}
+
+impl std::fmt::Display for RequestFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RequestFailure {}
+
+/// Whether `error` concerns only the request that caused it.
+pub fn is_request_failure(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<RequestFailure>().is_some()
+}
+
+/// How long to wait before loading a model again after `failures` runtime failures in a row:
+/// none after a single failure (the next request simply starts it again), then 30 s, doubling
+/// up to 16 minutes.
+pub fn cooldown(failures: u32) -> Option<std::time::Duration> {
+    (failures >= 2).then(|| std::time::Duration::from_secs(30) * 2u32.pow((failures - 2).min(5)))
 }
 
 /// Named stage durations for one request, in milliseconds, in the order they happened.
@@ -70,7 +103,7 @@ pub trait SttEngine: Send + Sync {
     fn accelerator(&self) -> &str;
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Voice {
     pub id: String,
     pub label: String,
@@ -98,9 +131,17 @@ pub trait TtsEngine: Send + Sync {
     /// Chain children have independent idle clocks even while other routes remain active.
     fn unload_idle(&self, _after: std::time::Duration) {}
     fn failure(&self) -> Option<String> { None }
+    /// Why this model runs on the CPU although the GPU was allowed (its GPU worker failed).
+    fn gpu_fallback(&self) -> Option<String> { None }
     fn retry_failed(&self) {}
     fn model_downloaded(&self, _id: &str) {}
     fn last_error(&self) -> Option<serde_json::Value> { None }
+    /// Read the whole text with one model of a voice list (a model's own preview).
+    fn synthesize_route(&self, _model: &str, _req: SpeakRequest<'_>, _timings: &mut Timings) -> anyhow::Result<Pcm> {
+        anyhow::bail!("this voice model is not a voice list")
+    }
+    /// Which model, voice and language read each part of the last request (voice lists only).
+    fn last_runs(&self) -> Option<serde_json::Value> { None }
     /// The voices of each enabled model, for picking them one by one.
     fn routes(&self) -> Vec<route::RouteVoices> {
         Vec::new()
@@ -124,7 +165,11 @@ pub mod stub {
     /// Two short beeps (440 Hz then 660 Hz) at 24 kHz.
     pub struct StubTts;
     impl TtsEngine for StubTts {
-        fn synthesize(&self, _req: SpeakRequest<'_>, _timings: &mut Timings) -> anyhow::Result<Pcm> {
+        fn synthesize(&self, req: SpeakRequest<'_>, _timings: &mut Timings) -> anyhow::Result<Pcm> {
+            // Lets HTTP tests see how a worker-reported failure is answered.
+            if req.text == "[stub token_limit]" {
+                return Err(RequestFailure { code: Some("token_limit".into()), message: "stub synthesis failed: speech token limit reached".into() }.into());
+            }
             let rate = 24_000u32;
             let mut samples = Vec::new();
             for (freq, len) in [(440.0f32, 0.25f32), (0.0, 0.1), (660.0, 0.25)] {

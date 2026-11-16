@@ -4,7 +4,8 @@
 import type { Engine, SiteStatus, Status } from "../shared/rpc";
 import type { Preferences } from "../shared/settings";
 import { DEVICE_NAMES, joinList, type Translate } from "./i18n";
-import { formatBytes, percent, phaseTone, type Tone } from "./format";
+import { percent, phaseTone, type Tone } from "./format";
+import { sidebarMemory } from "./sidebar-memory";
 
 /** The setting that turns each feature on. */
 const SITE_SWITCH = { dictation: "useForDictation", voiceInput: "useForVoiceInput", voiceOutput: "useForVoiceOutput" } as const;
@@ -18,6 +19,8 @@ export interface SidebarSummary {
    * never cut off.
    */
   candidates: string[];
+  /** Kept on its own line so a narrow sidebar does not discard either memory figure. */
+  memory?: string;
   /** Full description for assistive technology. */
   accessible: string;
   tone: Tone;
@@ -93,22 +96,24 @@ export function sidebarSummary(
   const classes = new Set([...accelerators].flatMap((a) => CLASSES[a]));
   const device = (["gpu", "npu", "cpu"] as const).filter((k) => classes.has(k)).map((k) => t(`sidebar.${k}`)).join("+");
   const deviceNames = [...new Set([...accelerators].flatMap((a) => (a === "mixed" ? ["metal", "cpu"] : [a])).map((a) => DEVICE_NAMES[a] ?? a))];
-  const memory = typeof status.memoryBytes === "number" && status.memoryBytes > 0 ? formatBytes(status.memoryBytes) : "";
+  const memory = sidebarMemory(status, classes.has("gpu"));
 
   const full = active.length === wanted.length;
   const lead = full ? t("sidebar.on") : t("sidebar.partial", { active: active.length, total: wanted.length });
   const join = (...parts: string[]) => parts.filter(Boolean).join(" · ");
   // Detail drops before the in-effect word, except that a green dot already says "on".
-  const candidates = [join(lead, device, memory), full && device ? join(device, memory) : "", join(lead, device), full && device ? device : "", lead];
+  const candidates = [join(lead, device), full && device ? device : "", lead];
 
   const accessible = [
     phase,
     ...effect,
     deviceNames.length ? t("sidebar.a11yDevices", { devices: joinList(t, deviceNames) }) : t("sidebar.a11yNoneLoaded"),
-    memory ? t("sidebar.a11yMemory", { size: memory }) : null,
+    memory?.dedicated !== null && memory?.dedicated !== undefined ? t("sidebar.a11yGpuMemory", { size: memory.dedicated }) : null,
+    memory ? t("sidebar.a11yMemory", { size: memory.resident }) : null,
   ];
   return {
     candidates: [...new Set(candidates.filter(Boolean))],
+    memory: memory?.text,
     accessible: accessible.filter(Boolean).join(" "),
     tone: full ? phaseTone(status.phase) : "warning",
   };

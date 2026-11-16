@@ -1,4 +1,4 @@
-//! Engine lifecycle: lazy load, warm-up, idle unload, background reload, status and latency stats.
+//! Engine lifecycle: lazy load, idle unload, background reload, status and latency stats.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -18,17 +18,65 @@ use crate::{
 /// Load a sherpa-onnx or remote voice model (anything but a chain).
 /// Why a voice model can never load with this build and settings, or None when it can.
 /// These are configuration facts, not failures: nothing here installs anything.
-fn unrunnable_voice(entry: &ModelEntry, store: &Store, use_gpu: bool) -> Option<String> {
+/// Longest wait behind another request on the same model, and behind a model that is loading
+/// (a first Core ML compile can take minutes). A stuck request never holds up later ones forever.
+const QUEUE_WAIT: Duration = Duration::from_secs(180);
+const LOAD_WAIT: Duration = Duration::from_secs(600);
+
+fn lock_within<'a, T>(mutex: &'a Mutex<T>, limit: Duration, what: &str) -> anyhow::Result<std::sync::MutexGuard<'a, T>> {
+    let deadline = Instant::now() + limit;
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(std::sync::TryLockError::WouldBlock) => anyhow::bail!("{what} is still busy after {} s; try again", limit.as_secs()),
+        }
+    }
+}
+
+fn unrunnable_voice(entry: &ModelEntry, use_gpu: bool) -> Option<String> {
     match entry.engine {
         Engine::Mlx if !cfg!(all(target_os = "macos", target_arch = "aarch64")) => {
             Some("MLX voice models need an Apple Silicon Mac".into())
         }
         Engine::Mlx if !use_gpu => Some("MLX voice models need GPU acceleration; Acceleration is set to CPU only".into()),
-        Engine::Mlx if engine::mlx::python(&store.models_dir).is_none() => {
-            Some("The MLX speech runtime is not installed; run install-qwen-runtime.sh".into())
+        Engine::Mlx if engine::mlx::worker_path().is_none() => {
+            Some("The native MLX worker is missing from this speech server installation".into())
         }
         Engine::Gguf if engine::gguf::worker_path().is_none() => Some("The GGUF speech worker is missing from this installation".into()),
         _ => None,
+    }
+}
+
+/// Voices of models whose catalog doesn't list them (most custom models), remembered from their
+/// first load. The model's voices can then be chosen while it is unloaded and after the server
+/// restarts (any settings change restarts it), without loading it again just to list them.
+fn voice_cache(store: &Store) -> std::path::PathBuf {
+    store.models_dir.join(".voices.json")
+}
+
+static VOICE_CACHE_LOCK: Mutex<()> = Mutex::new(());
+
+fn read_voice_cache(store: &Store) -> std::collections::BTreeMap<String, Vec<engine::Voice>> {
+    std::fs::read(voice_cache(store)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+fn cached_voices(store: &Store, id: &str) -> Vec<engine::Voice> {
+    read_voice_cache(store).remove(id).unwrap_or_default()
+}
+
+fn remember_voices(store: &Store, id: &str, voices: Vec<engine::Voice>) {
+    let _guard = VOICE_CACHE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut cache = read_voice_cache(store);
+    if voices.is_empty() || cache.get(id) == Some(&voices) {
+        return;
+    }
+    cache.insert(id.to_string(), voices);
+    let tmp = voice_cache(store).with_extension("json.tmp");
+    let written = serde_json::to_vec(&cache).map_err(anyhow::Error::from).and_then(|bytes| Ok(std::fs::write(&tmp, bytes)?)).and_then(|_| Ok(std::fs::rename(&tmp, voice_cache(store))?));
+    if let Err(error) = written {
+        tracing::warn!(model = id, error = %format!("{error:#}"), "could not remember the model's voices");
     }
 }
 
@@ -38,7 +86,7 @@ fn load_leaf_tts(entry: &ModelEntry, store: &Store, provider: &str, threads: i32
     Ok(match entry.engine {
         Engine::Sherpa => Arc::new(sherpa::SherpaTts::load(entry, &inst, provider, threads, default_voice)?),
         Engine::Openai => Arc::new(RemoteEngine::connect(entry.remote.as_ref().expect("validated"), handle.clone())?),
-        Engine::Mlx => Arc::new(engine::mlx::MlxTts::load(entry, &inst.root, &store.models_dir, use_gpu)?),
+        Engine::Mlx => Arc::new(engine::mlx::MlxTts::load(entry, &inst.root, use_gpu)?),
         Engine::Gguf => Arc::new(engine::gguf::GgufTts::load(entry, &inst.root, use_gpu)?),
         Engine::Whisper | Engine::Chain => anyhow::bail!("{} is not a voice model", entry.id),
     })
@@ -133,7 +181,7 @@ impl<T: ?Sized> Slot<T> {
         if let Some(ready) = self.current() {
             return ready;
         }
-        let _loading = self.load.lock().unwrap();
+        let _loading = lock_within(&self.load, LOAD_WAIT, "the model's loading")?;
         // Another caller may have finished loading while we waited.
         if let Some(ready) = self.current() {
             return ready;
@@ -355,12 +403,14 @@ impl Runtime {
         let entry = self.entry(model, Kind::Stt)?;
         let (entry, inst) = self.store.resolve(entry).ok_or_else(|| anyhow::anyhow!("model {} is not installed", entry.id))?;
         let entry = &entry;
-        Ok(match entry.engine {
+        let vad_path = if crate::speech_filter::required(entry) {
+            let vad = crate::speech_filter::model();
+            Some(self.store.locate(vad).and_then(|i| i.file(vad, "model"))
+                .ok_or_else(|| anyhow::anyhow!("speech activity detector is not installed; pull {} again", entry.id))?)
+        } else { None };
+        let engine: Arc<dyn SttEngine> = match entry.engine {
             Engine::Whisper => {
                 let path = inst.file(entry, "model").ok_or_else(|| anyhow::anyhow!("{}: files.model missing", entry.id))?;
-                let vad = crate::speech_filter::model();
-                let vad_path = self.store.locate(vad).and_then(|i| i.file(vad, "model"))
-                    .ok_or_else(|| anyhow::anyhow!("speech activity detector is not installed; pull {} again", entry.id))?;
                 let detector = (entry.id != LANGUAGE_DETECTOR)
                     .then(|| self.catalog.find(LANGUAGE_DETECTOR))
                     .flatten()
@@ -376,12 +426,18 @@ impl Runtime {
                 }
                 let loaded = whisper::WhisperStt::load(&path, detector.as_deref(), self.use_gpu(), self.settings.threads, self.settings.beam_size, coreml);
                 self.compiling.lock().unwrap().remove(&entry.id);
-                Arc::new(loaded?.with_speech_filter(&vad_path)?)
+                Arc::new(loaded?)
             }
-            Engine::Sherpa => Arc::new(sherpa::SherpaStt::load(entry, &inst, self.onnx_provider(), self.settings.threads, self.settings.stt_prompt.as_deref())?),
+            Engine::Sherpa => {
+                let loaded = sherpa::SherpaStt::load(entry, &inst, self.onnx_provider(), self.settings.threads, self.settings.stt_prompt.as_deref())?;
+                Arc::new(loaded)
+            }
             Engine::Openai => Arc::new(RemoteEngine::connect(entry.remote.as_ref().expect("validated"), self.handle.clone())?),
             Engine::Chain | Engine::Mlx | Engine::Gguf => anyhow::bail!("{} is a voice model", entry.id),
-        })
+        };
+        Ok(if let Some(path) = vad_path {
+            Arc::new(crate::speech_filter::FilteredStt::load(engine, &path)?)
+        } else { engine })
     }
 
     fn load_tts(&self) -> anyhow::Result<Arc<dyn TtsEngine>> {
@@ -395,16 +451,20 @@ impl Runtime {
             for id in entry.chain_models() {
                 let model = self.entry(&id, Kind::Tts)?;
                 anyhow::ensure!(model.engine != Engine::Chain, "a voice chain cannot contain another chain");
-                let voices = model.voices.iter().map(|v| engine::Voice {
+                let mut voices: Vec<engine::Voice> = model.voices.iter().map(|v| engine::Voice {
                     id: v.id.clone(), label: v.label.clone(), language: v.language.clone(), gender: v.gender.clone(), featured: v.featured,
                 }).collect();
+                // Voices the catalog doesn't list are known once the model has loaded.
+                if voices.is_empty() {
+                    voices = cached_voices(&self.store, &model.id);
+                }
                 let route = route::Route::lazy(self.lazy_route(model), model.id.clone(), model.label.clone(), model.languages.clone(), None, voices);
                 let (store, child) = (self.store.clone(), model.clone());
-                let (check_store, check_child, use_gpu) = (self.store.clone(), model.clone(), self.use_gpu());
+                let (check_child, use_gpu) = (model.clone(), self.use_gpu());
                 models.push(Arc::new(
                     route
                         .with_installed(Box::new(move || store.locate(&child).is_some()))
-                        .with_unrunnable(Box::new(move || unrunnable_voice(&check_child, &check_store, use_gpu))),
+                        .with_unrunnable(Box::new(move || unrunnable_voice(&check_child, use_gpu))),
                 ));
             }
             let preferred = serde_json::from_value(entry.options.get("language_models").cloned().unwrap_or_else(|| json!({})))?;
@@ -424,11 +484,11 @@ impl Runtime {
             if let Some(error) = entry.option_str("unavailable") {
                 return Some(Err(anyhow::anyhow!("{error}")));
             }
-            if entry.engine == Engine::Mlx && (!use_gpu || engine::mlx::python(&store.models_dir).is_none()) {
+            if entry.engine == Engine::Mlx && (!use_gpu || engine::mlx::worker_path().is_none()) {
                 return None;
             }
             if store.locate(&entry).is_none() {
-                if auto_pull && store.paseo_model(&entry).is_none() && !downloads.is_active(&entry.id) && downloads.error(&entry.id).is_none() {
+                if auto_pull && store.paseo_model(&entry).is_none() && downloads.may_start(&entry.id) {
                     tracing::info!(model = entry.id, "downloading an enabled voice model on first use");
                     let (downloads, store, entry) = (downloads.clone(), store.clone(), entry.clone());
                     handle.spawn(async move {
@@ -439,18 +499,22 @@ impl Runtime {
                 }
                 return None;
             }
-            Some(load_leaf_tts(&entry, &store, &provider, threads, &voice, &handle, use_gpu))
+            let loaded = load_leaf_tts(&entry, &store, &provider, threads, &voice, &handle, use_gpu);
+            if let (Ok(engine), true) = (&loaded, entry.voices.is_empty()) {
+                remember_voices(&store, &entry.id, engine.voices());
+            }
+            Some(loaded)
         })
     }
 
     /// Why `entry` can't run here as configured (see `unrunnable_voice`).
     pub fn unrunnable(&self, entry: &ModelEntry) -> Option<String> {
-        unrunnable_voice(entry, &self.store, self.use_gpu())
+        unrunnable_voice(entry, self.use_gpu())
     }
 
     /// A chain is usable when at least one enabled model is installed and can run here.
     pub fn installed(&self, entry: &ModelEntry) -> bool {
-        if entry.engine == Engine::Whisper && self.store.locate(crate::speech_filter::model()).is_none() {
+        if crate::speech_filter::required(entry) && self.store.locate(crate::speech_filter::model()).is_none() {
             return false;
         }
         if entry.engine == Engine::Chain {
@@ -464,7 +528,7 @@ impl Runtime {
     /// Entries needed by this model, including its enabled chain children.
     pub fn with_dependencies<'a>(&'a self, entry: &'a ModelEntry) -> Vec<&'a ModelEntry> {
         let mut out = vec![entry];
-        if entry.engine == Engine::Whisper {
+        if crate::speech_filter::required(entry) {
             out.push(crate::speech_filter::model());
         }
         if entry.engine == Engine::Chain {
@@ -485,11 +549,14 @@ impl Runtime {
                 continue;
             }
             let result = if entry.kind == Kind::Stt {
-                if let Some(slot) = self.stt.get(&entry.id) { slot.reset_failed(); }
+                let Some(slot) = self.stt.get(&entry.id) else { continue };
+                if !matches!(*slot.state.lock().unwrap(), SlotState::Failed { .. }) { continue; }
+                slot.reset_failed();
                 self.stt(&entry.id).map(|_| ())
             } else {
                 let engine = match &*self.tts.state.lock().unwrap() { SlotState::Ready(engine) => Some(engine.clone()), _ => None };
                 if let Some(engine) = engine { engine.model_downloaded(downloaded); }
+                if !matches!(*self.tts.state.lock().unwrap(), SlotState::Failed { .. }) { continue; }
                 self.tts.reset_failed();
                 self.tts().map(|_| ())
             };
@@ -539,9 +606,25 @@ impl Runtime {
         Ok(engine)
     }
 
-    /// Blocking: load a new engine for `model` while the current one keeps serving, then swap.
+    /// Voices to list without loading a model only for that: a loaded engine's own, a voice list's
+    /// (its models load lazily, so this is cheap), otherwise the catalog's.
+    pub fn tts_voices(&self) -> anyhow::Result<(Vec<engine::Voice>, Vec<route::RouteVoices>)> {
+        let loaded = matches!(self.tts.current(), Some(Ok(_)));
+        let entry = self.catalog.find(&self.settings.tts_model);
+        if self.settings.stub || loaded || entry.is_none_or(|e| e.engine == Engine::Chain) {
+            let engine = self.tts()?;
+            return Ok((engine.voices(), engine.routes()));
+        }
+        let entry = entry.expect("checked above");
+        let voices = entry.voices.iter().map(|v| engine::Voice { id: v.id.clone(), label: v.label.clone(), language: v.language.clone(), gender: v.gender.clone(), featured: v.featured }).collect();
+        Ok((voices, vec![]))
+    }
+
+    /// Reload an active model after an optional encoder download; never wake an unused model.
     pub fn reload_stt(&self, model: &str) {
         let Some(slot) = self.stt.get(model) else { return };
+        let _guard = slot.run.lock().unwrap();
+        if !matches!(*slot.state.lock().unwrap(), SlotState::Ready(_)) { return; }
         match self.load_stt(model) {
             Ok(engine) => {
                 self.set_accel(model, engine.accelerator());
@@ -563,7 +646,7 @@ impl Runtime {
         let Some(slot) = self.stt.get(model) else {
             return f(engine.as_ref(), timings);
         };
-        let _guard = timings.time("queue", || slot.run.lock().unwrap());
+        let _guard = timings.time("queue", || lock_within(&slot.run, QUEUE_WAIT, "this speech recognition model"))?;
         let started = Instant::now();
         let out = f(engine.as_ref(), timings);
         slot.record(started.elapsed().as_millis() as u64);
@@ -585,7 +668,7 @@ impl Runtime {
         f: impl FnOnce(&dyn TtsEngine, &mut crate::engine::Timings) -> anyhow::Result<R>,
     ) -> anyhow::Result<R> {
         let engine = timings.time("load", || self.tts())?;
-        let _guard = timings.time("queue", || self.tts.run.lock().unwrap());
+        let _guard = timings.time("queue", || lock_within(&self.tts.run, QUEUE_WAIT, "speech synthesis"))?;
         let started = Instant::now();
         let out = f(engine.as_ref(), timings);
         self.tts.record(started.elapsed().as_millis() as u64);
@@ -597,26 +680,6 @@ impl Runtime {
     /// A TTS stage measured after the engine lock is released (output audio encoding).
     pub fn record_tts_stage(&self, stage: &'static str, ms: f64) {
         self.tts.record_stages(&crate::engine::Timings(vec![(stage, ms)]));
-    }
-
-    /// Blocking: load every configured engine so first requests are fast. Engines load in
-    /// parallel, so a slow one (a first-time Neural Engine compile takes minutes) does not hold
-    /// back the others: the plugin can route dictation to a ready model meanwhile.
-    pub fn warm_up(&self) {
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                if let Err(err) = self.tts() {
-                    tracing::warn!(error = %format!("{err:#}"), "TTS warm-up failed");
-                }
-            });
-            for model in &self.settings.stt_models {
-                scope.spawn(move || {
-                    if let Err(err) = self.stt(model) {
-                        tracing::warn!(model, error = %format!("{err:#}"), "STT warm-up failed");
-                    }
-                });
-            }
-        });
     }
 
     fn configured_entries(&self) -> Vec<&ModelEntry> {
@@ -698,6 +761,8 @@ impl Runtime {
                 Some(reason) if !downloading => ("failed", Some(reason)),
                 _ => (if downloading { "downloading" } else { "missing" }, error),
             }
+        } else if let Some(reason) = self.unrunnable(entry).or_else(|| entry.option_str("unavailable").map(str::to_string)) {
+            ("failed", Some(reason))
         } else {
             slot.state_label()
         };
@@ -709,7 +774,8 @@ impl Runtime {
         EngineStatus {
             model: entry.id.clone(),
             state,
-            available: matches!(state, "ready" | "idle"),
+            // Installed models accept their first request without a startup load.
+            available: matches!(state, "ready" | "idle" | "unloaded"),
             accelerator: accel,
             error,
             p50_ms: slot.p50(),
@@ -851,6 +917,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_busy_model_is_waited_for_only_so_long() {
+        let busy = Mutex::new(());
+        let _held = busy.lock().unwrap();
+        let started = Instant::now();
+        let error = lock_within(&busy, Duration::from_millis(80), "this model").unwrap_err();
+        assert!(error.to_string().contains("still busy"));
+        assert!(started.elapsed() >= Duration::from_millis(80) && started.elapsed() < Duration::from_secs(2));
+        let free = Mutex::new(());
+        assert!(lock_within(&free, Duration::from_millis(80), "this model").is_ok());
+    }
+
+    #[test]
+    fn voices_seen_at_load_are_remembered_per_model() {
+        let root = std::env::temp_dir().join(format!("vk-voice-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store { models_dir: root.clone(), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false };
+        let voice = |id: &str| engine::Voice { id: id.into(), label: id.into(), language: "zh".into(), gender: "female".into(), featured: false };
+        assert!(cached_voices(&store, "custom-a").is_empty());
+        remember_voices(&store, "custom-a", vec![voice("zh-f01"), voice("zh-f02")]);
+        remember_voices(&store, "custom-b", vec![voice("speaker-0")]);
+        remember_voices(&store, "custom-a", vec![]);
+        assert_eq!(cached_voices(&store, "custom-a").len(), 2, "an empty list never replaces what was seen");
+        assert_eq!(cached_voices(&store, "custom-b")[0].id, "speaker-0");
+        std::fs::write(voice_cache(&store), "not json").unwrap();
+        assert!(cached_voices(&store, "custom-a").is_empty(), "a damaged cache only means loading once more");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn failed_or_panicking_loader_can_recover_without_poisoning_the_slot() {
         let slot: Slot<u8> = Slot::new();
         assert!(slot.get(|| panic!("simulated loader failure")).is_err());
@@ -929,7 +1024,9 @@ mod tests {
         settings.stt_models = vec!["sensevoice-int8".into()]; settings.tts_model = "unused".into();
         let store = Store { models_dir: folder.join("private"), reuse_dirs: vec![], shared_models_dir: Some(folder.join("paseo")), paseo_managed: true };
         let rt = Runtime::new(Catalog::load(&[]).unwrap(), store, settings, host.handle().clone());
-        assert!(rt.missing_models().is_empty());
+        // The shared ASR weights remain exclusively Paseo-managed. The small internal
+        // VAD is a separate Voice Kit dependency and may be fetched if not reusable.
+        assert_eq!(rt.missing_models().iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["silero-vad"]);
         let result = host.block_on(rt.downloads.ensure(&rt.store, rt.catalog.find("sensevoice-int8").unwrap()));
         assert!(result.unwrap_err().to_string().contains("managed by Paseo"));
         assert!(rt.downloads.snapshot().is_empty());
@@ -979,15 +1076,36 @@ mod tests {
     }
 
     #[test]
-    fn whisper_fetches_speech_filter_and_reuses_shared_copy() {
+    fn speech_filtered_recognizers_fetch_and_reuse_shared_detector() {
         let handle = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("vk-vad-deps-{}", std::process::id()));
         let mut settings = crate::default_settings();
-        settings.stt_models = vec!["whisper-large-v3-turbo-q5_0".into()];
+        settings.stt_models = vec!["whisper-large-v3-turbo-q5_0".into(), "qwen3-asr-0.6b-int8".into()];
         let store = Store { models_dir: dir.join("own"), reuse_dirs: vec![dir.join("shared")], shared_models_dir: None, paseo_managed: false };
         let rt = Runtime::new(Catalog::load(&[]).unwrap(), store, settings, handle.handle().clone());
         let whisper = rt.catalog.find("whisper-large-v3-turbo-q5_0").unwrap();
         assert!(rt.with_dependencies(whisper).iter().any(|m| m.id == "silero-vad"));
+        let qwen = rt.catalog.find("qwen3-asr-0.6b-int8").unwrap();
+        assert!(rt.with_dependencies(qwen).iter().any(|m| m.id == "silero-vad"));
+        let mut custom = qwen.clone();
+        custom.id = "custom-qwen".into();
+        assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        custom.family = Some("transducer".into());
+        assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        for entry in rt.catalog.entries().iter().filter(|e| e.kind == Kind::Stt && matches!(e.engine, Engine::Whisper | Engine::Sherpa)) {
+            assert!(rt.with_dependencies(entry).iter().any(|m| m.id == "silero-vad"), "{}", entry.id);
+        }
+        // Custom/new Sherpa families get the same preprocessing without a whitelist.
+        for family in [None, Some("a-new-family")] {
+            custom.family = family.map(str::to_string);
+            assert!(rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"));
+        }
+        custom.kind = Kind::Tts;
+        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"), "voice models do not acquire an ASR filter");
+        assert!(!crate::speech_filter::required(crate::speech_filter::model()), "the VAD resource is not itself a recognizer");
+        custom.kind = Kind::Stt;
+        custom.engine = Engine::Openai;
+        assert!(!rt.with_dependencies(&custom).iter().any(|m| m.id == "silero-vad"), "remote input stays untouched");
         assert!(rt.missing_models().iter().any(|m| m.id == "silero-vad"));
         // Reusing Paseo's detector must not copy, replace or download that model.
         let shared = dir.join("shared/silero-vad");
@@ -996,6 +1114,39 @@ mod tests {
         assert!(!rt.missing_models().iter().any(|m| m.id == "silero-vad"));
         assert!(rt.store.locate(crate::speech_filter::model()).unwrap().shared);
         assert!(rt.catalog.find("silero-vad").is_none(), "VAD is not a selectable recognizer");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "set VOICEKIT_TEST_QWEN_ASR and VOICEKIT_TEST_VAD to installed local resources"]
+    fn qwen_recovers_after_its_missing_detector_is_installed() {
+        let host = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("vk-qwen-vad-recovery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entry = Catalog::load(&[]).unwrap().find("qwen3-asr-0.6b-int8").unwrap().clone();
+        entry.id = "custom-qwen-recovery".into();
+        entry.path = Some(std::env::var("VOICEKIT_TEST_QWEN_ASR").unwrap());
+        let catalog_path = dir.join("catalog.json");
+        std::fs::write(&catalog_path, json!({"models": [entry]}).to_string()).unwrap();
+        let mut settings = crate::default_settings();
+        settings.stt_models = vec!["custom-qwen-recovery".into()];
+        settings.threads = 2;
+        settings.accelerator = "cpu".into();
+        let rt = Runtime::new(Catalog::load(&[catalog_path]).unwrap(), Store {
+            models_dir: dir.join("models"), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false,
+        }, settings, host.handle().clone());
+        let entry = rt.catalog.find("custom-qwen-recovery").unwrap();
+        assert!(rt.store.locate(entry).is_some(), "ASR weights are already installed");
+        assert!(!rt.installed(entry), "missing VAD must make Qwen unavailable");
+        let error = rt.stt(&entry.id).err().expect("missing dependency");
+        assert!(error.to_string().contains("speech activity detector"));
+        let vad = dir.join("models/silero-vad");
+        std::fs::create_dir_all(&vad).unwrap();
+        std::fs::copy(std::env::var("VOICEKIT_TEST_VAD").unwrap(), vad.join("silero_vad.onnx")).unwrap();
+        assert!(rt.installed(entry));
+        rt.recover_downloaded("silero-vad");
+        assert!(rt.stt(&entry.id).is_ok(), "dependency completion clears the cached failure without restart");
+        drop(rt);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1096,10 +1247,15 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("vk-remote-flaky-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("catalog.json");
-        std::fs::write(&file, json!({ "models": [{ "id": "custom-remote-asr", "kind": "stt", "label": "Remote", "engine": "openai",
-            "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } }] }).to_string()).unwrap();
+        std::fs::write(&file, json!({ "models": [
+            { "id": "custom-remote-asr", "kind": "stt", "label": "Remote", "engine": "openai",
+              "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } },
+            { "id": "custom-remote-voice", "kind": "tts", "label": "Remote", "engine": "openai",
+              "remote": { "base_url": format!("http://{}/v1", server.address), "model": "fixture" } }
+        ] }).to_string()).unwrap();
         let mut settings = crate::default_settings();
         settings.stt_models = vec!["custom-remote-asr".into()];
+        settings.tts_model = "custom-remote-voice".into();
         let rt = Runtime::new(Catalog::load(&[file]).unwrap(), Store { models_dir: folder.join("models"), reuse_dirs: vec![], shared_models_dir: None, paseo_managed: false }, settings, host.handle().clone());
         let audio = crate::audio::Pcm { samples: vec![0.1; 1600], sample_rate: 16_000 };
         let transcribe = || rt.with_stt("custom-remote-asr", &mut crate::engine::Timings::default(), |engine, t| {
@@ -1107,6 +1263,23 @@ mod tests {
         });
         let status = || rt.status()["stt"][0].clone();
 
+        // Health checks, download completion, optional encoder completion and recovery ticks
+        // must leave installed engines routable without allocating their models.
+        let assert_unloaded = || {
+            let health = rt.status();
+            assert_eq!(health["status"], "ready");
+            for engine in [&health["stt"][0], &health["tts"]] {
+                assert_eq!(engine["state"], "unloaded");
+                assert_eq!(engine["available"], true);
+                assert_eq!(engine["accelerator"], serde_json::Value::Null);
+            }
+        };
+        assert_unloaded();
+        rt.recover_downloaded("custom-remote-asr");
+        rt.recover_downloaded("custom-remote-voice");
+        rt.reload_stt("custom-remote-asr");
+        rt.retry_failed();
+        assert_unloaded();
         assert_eq!(transcribe().unwrap(), "remote works");
         assert_eq!(status()["available"], true);
 

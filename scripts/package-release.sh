@@ -33,9 +33,8 @@ script_root="$(cd "$(dirname "$0")/.." && pwd)"
 cp "$script_root"/server/vendor/qwen-sources/* "$stage/gguf-runtime/notices/sources/"
 cp -R "$notices/." "$stage/"
 if [ "$key" = darwin-arm64 ]; then
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  mkdir "$stage/qwen-runtime"
-  cp "$script_dir/install-qwen-runtime.sh" "$script_dir/qwen-requirements.txt" "$script_dir/qwen-build-requirements.txt" "$stage/qwen-runtime/"
+  if [ ! -f "$target/mlx-runtime/runtime.json" ]; then echo "missing native MLX worker; run scripts/build-mlx-worker.py first" >&2; exit 1; fi
+  cp -R "$target/mlx-runtime" "$stage/"
 fi
 shopt -s nullglob
 if [[ "$key" != darwin-* ]]; then

@@ -2,7 +2,7 @@
 // React Native primitives only; every color comes from the Paseo theme.
 import type { PluginTheme } from "@getpaseo/plugin";
 import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 
 type Colors = PluginTheme["colors"];
 export type BadgeTone = "accent" | "success" | "warning" | "danger" | "neutral";
@@ -125,6 +125,53 @@ export function Button({
     >
       <Text style={{ color, fontSize: 13, fontWeight: "500" }}>{label}</Text>
     </Pressable>
+  );
+}
+
+/** A single-line text field with an action right after it (e.g. text to read, then Play). */
+export function FieldWithAction({
+  theme,
+  value,
+  placeholder,
+  accessibilityLabel,
+  onChangeText,
+  onSubmit,
+  action,
+}: {
+  theme: PluginTheme;
+  value: string;
+  placeholder?: string;
+  accessibilityLabel: string;
+  onChangeText(text: string): void;
+  onSubmit?(): void;
+  action: ReactNode;
+}) {
+  const c = theme.colors;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <TextInput
+        value={value}
+        placeholder={placeholder}
+        placeholderTextColor={c.foregroundMuted}
+        accessibilityLabel={accessibilityLabel}
+        onChangeText={onChangeText}
+        onSubmitEditing={onSubmit}
+        returnKeyType="go"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          color: c.foreground,
+          fontSize: 14,
+          paddingHorizontal: 10,
+          paddingVertical: 7,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: c.border,
+          backgroundColor: c.surface0,
+        }}
+      />
+      {action}
+    </View>
   );
 }
 

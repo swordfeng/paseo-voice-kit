@@ -26,6 +26,11 @@ fn provider_name(provider: &str) -> String {
     }
 }
 
+/// What status reports. The bundled sherpa-onnx builds run every model on the CPU: a requested
+/// Core ML, CUDA or DirectML provider silently falls back, so reporting the request would claim
+/// a GPU that isn't used.
+const RUNS_ON: &str = "cpu";
+
 pub struct SherpaStt {
     recognizer: OfflineRecognizer,
     accelerator: String,
@@ -88,17 +93,19 @@ impl SherpaStt {
             .ok_or_else(|| anyhow::anyhow!("sherpa-onnx could not load {} ({family}) from {}", entry.id, inst.root.display()))?;
         Ok(Self {
             recognizer,
-            accelerator: provider_name(provider),
+            accelerator: RUNS_ON.to_string(),
             tidy_caps: matches!(family, "sense_voice" | "paraformer"),
             qwen3_asr: family == "qwen3_asr",
         })
     }
+
 }
 
 impl SttEngine for SherpaStt {
     fn transcribe(&self, req: TranscribeRequest<'_>, _timings: &mut Timings) -> anyhow::Result<String> {
+        let audio = req.audio;
         let stream = self.recognizer.create_stream();
-        stream.accept_waveform(req.audio.sample_rate as i32, &req.audio.samples);
+        stream.accept_waveform(audio.sample_rate as i32, &audio.samples);
         self.recognizer.decode(&stream);
         let result = stream.get_result().ok_or_else(|| anyhow::anyhow!("no recognition result"))?;
         let text = result.text.trim();
@@ -128,6 +135,18 @@ impl SherpaTts {
         let family = entry.family.as_deref().unwrap_or_default();
         let f = |role: &str| inst.files_csv(entry, role);
         let mut model = OfflineTtsModelConfig { num_threads: threads, provider: Some(provider_name(provider)), ..Default::default() };
+        // sherpa-onnx 2.0 dropped espeak-ng: models that need its phonemes can't speak, and the
+        // reason is clearer here than as silence or a native error later.
+        let needs_phonemizer = match family {
+            "kokoro" => f("lexicon").is_none(),
+            "vits" => f("lexicon").is_none() && f("data_dir").is_some(),
+            _ => false,
+        };
+        anyhow::ensure!(
+            !needs_phonemizer,
+            "this {family} model needs a phonemizer (espeak-ng) for its language, which this version doesn't include; models with a lexicon, such as Kokoro multilingual or MeloTTS, work"
+        );
+        anyhow::ensure!(family != "matcha", "Matcha models aren't supported in this version (English text was dropped in tests)");
         match family {
             "kokoro" => {
                 model.kokoro = OfflineTtsKokoroModelConfig {
@@ -178,7 +197,7 @@ impl SherpaTts {
         let tts = OfflineTts::create(&config)
             .ok_or_else(|| anyhow::anyhow!("sherpa-onnx could not load {} ({family}) from {}", entry.id, inst.root.display()))?;
         let voices = voice_list(entry, family, tts.num_speakers());
-        let mut engine = Self { tts, needs_language: family == "supertonic", languages: entry.languages.clone(), voices, default_sid: 0, accelerator: provider_name(provider) };
+        let mut engine = Self { tts, needs_language: family == "supertonic", languages: entry.languages.clone(), voices, default_sid: 0, accelerator: RUNS_ON.to_string() };
         let preferred = [default_voice, entry.default_voice.as_deref().unwrap_or("")];
         engine.default_sid = preferred.iter().find_map(|v| engine.resolve_sid(v)).unwrap_or(0);
         Ok(engine)
@@ -236,13 +255,12 @@ fn voice_list(entry: &ModelEntry, family: &str, num_speakers: i32) -> Vec<(Voice
     out
 }
 
-fn speech_language<'a>(text: &str, provided: Option<&'a str>, supported: &[String]) -> &'a str {
+/// The language to read `text` in, or None when this model doesn't speak it. Reading it with
+/// another language's pronunciation would be wrong, so that is never a fallback (the voice list
+/// handles allowed approximations before calling a model).
+fn speech_language<'a>(text: &str, provided: Option<&'a str>, supported: &[String]) -> Option<&'a str> {
     let language = provided.or_else(|| crate::lang::detect(text)).unwrap_or("en");
-    if supported.is_empty() || supported.iter().any(|s| s == "multi" || s == language) {
-        language
-    } else {
-        "en"
-    }
+    (supported.is_empty() || supported.iter().any(|s| s == "multi" || s == language)).then_some(language)
 }
 
 impl TtsEngine for SherpaTts {
@@ -250,7 +268,10 @@ impl TtsEngine for SherpaTts {
         let sid = self.resolve_sid(req.voice).unwrap_or(self.default_sid);
         let mut config = GenerationConfig { sid, speed: req.speed, ..Default::default() };
         if self.needs_language {
-            let lang = speech_language(req.text, req.language, &self.languages);
+            let lang = speech_language(req.text, req.language, &self.languages).ok_or_else(|| super::RequestFailure {
+                code: Some("unsupported_language".into()),
+                message: "This voice model doesn't speak the language of this text".into(),
+            })?;
             config.extra = Some([("lang".to_string(), serde_json::Value::String(lang.to_string()))].into_iter().collect());
         }
         let audio = self
@@ -351,7 +372,7 @@ mod tests {
     #[test]
     fn qwen3_asr_header_is_removed_but_transcripts_are_kept() {
         // Plain transcripts and ordinary words pass through untouched.
-        for plain in ["Hello, this is a speech test.", "你好，这是一个语音测试。", "language matters here", "Utterance one, utterance two."] {
+        for plain in ["Hello, this is a speech test.", "你好，这是一个语音测试。", "language", "language matters here", "Utterance one, utterance two."] {
             assert_eq!(qwen3_asr_transcript(plain), plain);
         }
         // The official header, in any language, and a stray single-word label.
@@ -375,12 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_speech_language_falls_back_without_changing_recognition() {
+    fn unsupported_speech_language_is_refused_not_read_as_english() {
         let supported = vec!["en".into(), "de".into()];
-        assert_eq!(speech_language("你好，今天天气很好。", None, &supported), "en");
-        assert_eq!(speech_language("hello", Some("th"), &supported), "en");
-        assert_eq!(speech_language("hello", Some("de"), &supported), "de");
-        assert_eq!(speech_language("你好", None, &["multi".into()]), "zh");
+        assert_eq!(speech_language("你好，今天天气很好。", None, &supported), None);
+        assert_eq!(speech_language("hello", Some("th"), &supported), None);
+        assert_eq!(speech_language("hello", Some("de"), &supported), Some("de"));
+        assert_eq!(speech_language("你好", None, &["multi".into()]), Some("zh"));
     }
 
     #[test]

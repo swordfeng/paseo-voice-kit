@@ -1,6 +1,7 @@
 // Private, bounded stdio worker. A separate process isolates its GGML from whisper.cpp.
 #include "qwen.h"
 #include "ggml-backend.h"
+#include "gguf.h"
 #include "yyjson.h"
 #include <algorithm>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -15,6 +17,8 @@
 #include <fcntl.h>
 #include <io.h>
 #endif
+
+extern "C" int voicekit_qwen_text_token_count(qt_context *, const char *, size_t);
 
 static std::string escaped(const std::string &s) {
     yyjson_mut_doc *d = yyjson_mut_doc_new(nullptr);
@@ -32,17 +36,61 @@ static void frame(const std::string &json, const std::vector<uint8_t> &pcm = {})
     std::cout.flush();
 }
 static void error(const std::string &s) { frame("{\"event\":\"error\",\"bytes\":0,\"error\":" + escaped(s) + "}"); }
+// `code` lets the speech server tell causes apart, e.g. "token_limit" for a generation that ran to its cap.
+static void error(const std::string &s, const char *code) { frame("{\"event\":\"error\",\"bytes\":0,\"error\":" + escaped(s) + ",\"code\":\"" + code + "\"}"); }
 static std::string string_value(yyjson_val *root, const char *key, const char *fallback) {
     const char *s = yyjson_get_str(yyjson_obj_get(root, key)); return s ? s : fallback;
 }
 static bool expired(void *p) {
     return std::chrono::steady_clock::now() >= *static_cast<std::chrono::steady_clock::time_point *>(p);
 }
+#ifndef __APPLE__
+static bool needs_vulkan_mmvq_workaround(const char *path) {
+    // Read metadata only. Match model content, never a user-controlled filename.
+    gguf_context *meta = gguf_init_from_file(path, {true, nullptr});
+    if (!meta) {
+        std::fprintf(stderr, "[qwen] MMVQ compatibility check could not read talker GGUF; leaving backend defaults\n");
+        return false; // qt_init retains responsibility for reporting model errors.
+    }
+    const auto arch = gguf_find_key(meta, "general.architecture");
+    const auto width = gguf_find_key(meta, "qwen3-tts.talker.embedding_length");
+    const bool small_qwen = arch >= 0 && gguf_get_kv_type(meta, arch) == GGUF_TYPE_STRING &&
+        std::strcmp(gguf_get_val_str(meta, arch), "qwen3-tts") == 0 &&
+        width >= 0 && gguf_get_kv_type(meta, width) == GGUF_TYPE_UINT32 && gguf_get_val_u32(meta, width) == 1024;
+    bool q4 = false;
+    if (small_qwen) for (int64_t i = 0; i < gguf_get_n_tensors(meta); ++i) {
+        if (gguf_get_tensor_type(meta, i) == GGML_TYPE_Q4_K) { q4 = true; break; }
+    }
+    gguf_free(meta);
+    return small_qwen && q4;
+}
+#endif
 int main(int argc, char **argv) {
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (argc != 4) return 2;
+#ifndef __APPLE__
+    // The pinned Vulkan MMVQ path makes the 1024-wide Q4 model exhaust its
+    // token limit on the RTX 5090, both on Windows and on Linux (WSL's Dozen
+    // driver). Bypass activation-vector quantization only in this worker;
+    // keep Vulkan, FA, and the 1.7B Q8 path unchanged. (macOS uses Metal.)
+    if (std::string(argv[3]) != "cpu" && needs_vulkan_mmvq_workaround(argv[1])) {
+        if (std::getenv("GGML_VK_DISABLE_MMVQ") || std::getenv("GGML_VK_FORCE_MMVQ")) {
+            std::fprintf(stderr, "[qwen] preserving explicit Vulkan MMVQ environment override\n");
+        } else {
+#ifdef _WIN32
+            const bool set = _putenv_s("GGML_VK_DISABLE_MMVQ", "1") == 0;
+#else
+            const bool set = setenv("GGML_VK_DISABLE_MMVQ", "1", 1) == 0;
+#endif
+            if (!set) {
+                error("Could not configure Vulkan speech precision"); return 1;
+            }
+            std::fprintf(stderr, "[qwen] Vulkan MMVQ disabled for 1024-wide Q4 talker (worker only)\n");
+        }
+    }
+#endif
 #ifdef __APPLE__
     // Backend registration eagerly initializes Metal (and compiles its shaders),
     // even when qt_init will select CPU. CPU-only workers must avoid that work.
@@ -95,29 +143,49 @@ int main(int argc, char **argv) {
         if (!doc) { error("invalid request JSON"); continue; }
         auto root = yyjson_doc_get_root(doc);
         std::string text = string_value(root, "text", ""), voice = string_value(root, "voice", "vivian"), language = string_value(root, "language", "auto");
+        if (string_value(root, "op", "speak") == "count_tokens") {
+            int count = voicekit_qwen_text_token_count(context, text.data(), text.size());
+            if (count < 0) error("text token count failed");
+            else frame("{\"event\":\"text_tokens\",\"bytes\":0,\"count\":" + std::to_string(count) + "}");
+            yyjson_doc_free(doc); continue;
+        }
+        const std::string instruction = string_value(root, "instruction", "");
+        if (instruction.size() > 2048) { error("voice instruction too large"); yyjson_doc_free(doc); continue; }
         qt_tts_params params; qt_tts_default_params(&params);
         params.text = text.c_str(); params.speaker = voice.c_str(); params.lang = language.c_str();
-        // Keep ordinary replies reproducible and reduce expressive sampling variance. The
-        // acoustic sub-talker keeps the upstream defaults; this controls the main talker only.
-        params.temperature = 0.7f;
-        params.seed = 42;
-        // Private IPC overrides allow short, reproducible sampling comparisons.
+        params.instruct = instruction.empty() ? nullptr : instruction.c_str();
+        // Both workers receive the same sampling policy from the speech server.
         auto temperature = yyjson_obj_get(root, "temperature");
         auto seed = yyjson_obj_get(root, "seed");
-        if ((temperature && (!yyjson_is_num(temperature) || !std::isfinite(yyjson_get_num(temperature)) || yyjson_get_num(temperature) < 0 || yyjson_get_num(temperature) > 2)) ||
-            (seed && (!yyjson_is_int(seed) || yyjson_get_sint(seed) < 0))) {
+        if (!yyjson_is_num(temperature) || !std::isfinite(yyjson_get_num(temperature)) || yyjson_get_num(temperature) < 0 || yyjson_get_num(temperature) > 2 ||
+            !yyjson_is_int(seed) || yyjson_get_sint(seed) < 0) {
             error("invalid sampling parameters"); yyjson_doc_free(doc); continue;
         }
-        if (temperature) params.temperature = float(yyjson_get_num(temperature));
-        if (seed) params.seed = yyjson_get_sint(seed);
+        params.temperature = float(yyjson_get_num(temperature));
+        params.subtalker_temperature = params.temperature;
+        params.seed = yyjson_get_sint(seed);
+        params.top_k = params.subtalker_top_k = 50;
+        params.top_p = params.subtalker_top_p = 1.0f;
+        params.repetition_penalty = 1.05f;
         std::fprintf(stderr, "[qwen] speaker=%s language=%s temperature=%.2f seed=%lld\n", voice.c_str(), language.c_str(), params.temperature, (long long)params.seed);
-        params.max_new_tokens = 1200;
+        // The server caps each chunk by its text length (at most 1200 frames, 96 s).
+        auto limit = yyjson_obj_get(root, "max_new_tokens");
+        params.max_new_tokens = yyjson_is_int(limit) ? int(std::clamp<int64_t>(yyjson_get_sint(limit), 16, 1200)) : 1200;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         params.cancel = expired; params.cancel_user_data = &deadline;
         qt_audio audio = {};
         auto rc = qt_synthesize(context, &params, &audio);
         if (rc != QT_STATUS_OK) error(qt_last_error());
-        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0 || audio.n_samples >= params.max_new_tokens * 1920) error("empty or token-limited audio");
+        else if (audio.n_samples >= params.max_new_tokens * 1920) {
+            std::fprintf(stderr, "[qwen] rejected audio: generation reached its limit, samples=%d sample_limit=%d\n",
+                         audio.n_samples, params.max_new_tokens * 1920);
+            error("speech token limit reached; refusing truncated audio", "token_limit");
+        }
+        else if (audio.channels != 1 || audio.sample_rate != 24000 || audio.n_samples <= 0) {
+            std::fprintf(stderr, "[qwen] rejected audio: channels=%d rate=%d samples=%d\n",
+                         audio.channels, audio.sample_rate, audio.n_samples);
+            error("empty or malformed audio");
+        }
         else {
             std::vector<uint8_t> pcm(size_t(audio.n_samples) * 2);
             bool valid = true;

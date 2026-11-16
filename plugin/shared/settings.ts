@@ -10,9 +10,22 @@ import { z } from "zod";
 export const DEFAULT_GPU_STT_MODEL = "whisper-large-v3-turbo-q5_0";
 export const DEFAULT_CPU_STT_MODEL = "qwen3-asr-0.6b-int8";
 
-/** The voice string sent to voicekit and written into Paseo's voice settings: a persona or "custom". */
-export function voiceSpec(prefs: { voice: string }): string {
-  return prefs.voice;
+/**
+ * The voice written into Paseo's voice settings and sent with requests. Voices are chosen per
+ * model in Voice Kit (`modelVoices`), so this is a fixed placeholder the server ignores.
+ */
+export const PASEO_VOICE = "voicekit";
+
+/**
+ * A voice model's voice: the user's choice, else the default. The defaults pair the two built-in
+ * families so a mixed-language reply sounds like one speaker: Qwen3-TTS serena's closest
+ * Supertonic voice is F1 (docs/eval.md). Other models use their own default voice (undefined).
+ */
+export function modelVoice(prefs: { modelVoices: Record<string, string> }, id: string, family?: string | null): string | undefined {
+  if (prefs.modelVoices[id]) return prefs.modelVoices[id];
+  if (id === "supertonic-3" || family === "supertonic") return "F1";
+  if (/^qwen3-tts-/.test(id) || family === "qwen3_tts" || family === "qwen3_tts_gguf") return "serena";
+  return undefined;
 }
 
 /** Default ordered voice model list: Supertonic 3 alone. */
@@ -42,8 +55,11 @@ export const customModelSchema = z.object({
   baseUrl: z.string().optional(),
   /** server: model name on that server. */
   model: z.string().optional(),
-  /** server: API key, if the server needs one. Stored on the daemon host, not in a vault. */
-  apiKey: z.string().optional(),
+  /**
+   * server: whether an API key is saved for it. The key itself is kept only on the daemon
+   * (plugin/server/model-keys.ts) and is never part of these settings, which apps can read.
+   */
+  hasApiKey: z.boolean().optional(),
   /** server TTS: voice to request. */
   voice: z.string().optional(),
   /** whisper / sherpa: local path, or an https URL to download (.bin, .tar.bz2 or .zip). */
@@ -77,8 +93,12 @@ export const SHERPA_FAMILIES: { value: string; label: string; kind: "stt" | "tts
   { value: "fire_red_asr_ctc", label: "FireRedASR CTC", kind: "stt" },
   { value: "nemo_ctc", label: "NeMo CTC", kind: "stt" },
   { value: "dolphin", label: "Dolphin", kind: "stt" },
-  { value: "kokoro", label: "Kokoro", kind: "tts" },
-  { value: "vits", label: "VITS (MeloTTS, Piper)", kind: "tts" },
+  { value: "moonshine", label: "Moonshine", kind: "stt" },
+  { value: "omnilingual", label: "Omnilingual ASR", kind: "stt" },
+  // Voices need a lexicon: models that need espeak-ng phonemes (Piper, English-only Kokoro)
+  // can't speak with sherpa-onnx 2.0 and are refused.
+  { value: "kokoro", label: "Kokoro (multilingual)", kind: "tts" },
+  { value: "vits", label: "VITS with a lexicon (such as MeloTTS)", kind: "tts" },
   // Runs in the MLX runtime, not sherpa-onnx; listed here because it is added the same way.
   { value: "qwen3_tts", label: "Qwen3-TTS (MLX, Apple Silicon)", kind: "tts" },
   // Runs with qwentts.cpp (GGUF): a talker and a codec file.
@@ -114,15 +134,10 @@ export const preferencesSchema = z.object({
   ttsModels: z.array(z.string()).default([DEFAULT_VOICE_MODEL]),
   /** Per-language first choice among enabled models that speak it: language -> model id. */
   ttsLanguageModels: z.record(z.string(), z.string()).default({}),
-  /** Custom voice per model (voice "custom"): model id -> voice id. */
+  /** The voice chosen for each voice model: model id -> voice id (see `modelVoice` for defaults). */
   modelVoices: z.record(z.string(), z.string()).default({}),
   /** Languages the user allows to be read approximately (see APPROXIMATE_LANGUAGES). */
   ttsApproximateLanguages: z.array(z.string()).default([]),
-  /**
-   * A persona id (similar voices paired across the enabled models), or "custom" to use
-   * `modelVoices`.
-   */
-  voice: z.string().default("female-higher"),
   speed: z.number().min(0.5).max(2).default(1),
   /** "auto" detects the spoken language; otherwise an ISO 639-1 code. */
   language: z.string().default("auto"),
@@ -138,8 +153,11 @@ export const preferencesSchema = z.object({
   customModels: z.array(customModelSchema).default([]),
   /** Download missing models automatically. */
   autoDownload: z.boolean().default(true),
-  /** Explicit consent for downloading and installing the separately distributed native runtime. */
-  runtimeDownloadApproved: z.boolean().default(false),
+  /**
+   * Explicit consent for downloading and installing the separately distributed speech server: the
+   * SHA-256 of the one archive the user approved. A new version or build asks again.
+   */
+  approvedServerArchive: z.string().default(""),
   /** Free model memory after this many idle minutes. 0 keeps models loaded. */
   idleUnloadMinutes: z.number().int().min(0).max(1440).default(10),
   port: z.number().int().min(1024).max(65535).default(DEFAULT_PORT),

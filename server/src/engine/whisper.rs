@@ -89,7 +89,6 @@ pub struct WhisperStt {
     threads: i32,
     beam_size: i32,
     accelerator: String,
-    speech_filter: Option<Mutex<crate::speech_filter::SpeechFilter>>,
 }
 
 impl WhisperStt {
@@ -129,12 +128,7 @@ impl WhisperStt {
             }
             None => None,
         };
-        Ok(Self { state: Mutex::new(state), _ctx: ctx, detector, threads, beam_size, accelerator, speech_filter: None })
-    }
-
-    pub fn with_speech_filter(mut self, path: &Path) -> anyhow::Result<Self> {
-        self.speech_filter = Some(Mutex::new(crate::speech_filter::SpeechFilter::load(path)?));
-        Ok(self)
+        Ok(Self { state: Mutex::new(state), _ctx: ctx, detector, threads, beam_size, accelerator })
     }
 
     /// Time the encoder (a full 30 s window, as every request runs) on the device `load` would
@@ -195,15 +189,7 @@ impl WhisperStt {
 
 impl SttEngine for WhisperStt {
     fn transcribe(&self, req: TranscribeRequest<'_>, timings: &mut Timings) -> anyhow::Result<String> {
-        let filtered = if let Some(filter) = &self.speech_filter {
-            let filtered = timings.time("speech_filter", || filter.lock().unwrap_or_else(|p| p.into_inner()).speech(req.audio))?;
-            tracing::info!(input_secs = req.audio.duration_secs(), speech_secs = filtered.as_ref().map_or(0.0, |a| a.duration_secs()), "speech filtered");
-            match filtered {
-                Some(audio) => Some(audio),
-                None => return Ok(String::new()),
-            }
-        } else { None };
-        let audio = filtered.as_ref().unwrap_or(req.audio);
+        let audio = req.audio;
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let strategy = if self.beam_size > 1 {
             SamplingStrategy::BeamSearch { beam_size: self.beam_size, patience: -1.0 }

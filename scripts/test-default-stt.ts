@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DefaultSttModel, DefaultSttSelectionPending, chooseDefaultSttModel, needsDefaultStt, withDefaultSttModels } from "../plugin/server/default-stt";
+import { DefaultSttModel, DefaultSttSelectionPending, INCONCLUSIVE_CHECKS, chooseDefaultSttModel, interimListeningModel, needsDefaultStt, settledDefault, withDefaultSttModels } from "../plugin/server/default-stt";
 import { DEFAULT_CPU_STT_MODEL, DEFAULT_GPU_STT_MODEL, preferencesSchema } from "../plugin/shared/settings";
 
 const folder = await mkdtemp(join(tmpdir(), "vk-default-stt-"));
@@ -85,3 +85,20 @@ try {
   }
   console.log("PASS initial selection persists across reloads; manual feature choices are independent; deferred install retries without changing the default");
 } finally { await rm(folder, { recursive: true, force: true }); }
+
+// STT-3: while the GPU check is pending, listening stays with built-in speech; after three
+// inconclusive checks in a row the CPU model becomes the default; other errors keep the CPU model
+// for the moment so they are reported, never stored.
+{
+  const pending = new DefaultSttSelectionPending("GPU measurement is unavailable");
+  assert.equal(interimListeningModel(pending), "", "nothing to download while the check is pending");
+  assert.equal(interimListeningModel(new Error("Confirm installation")), DEFAULT_CPU_STT_MODEL);
+  assert.equal(INCONCLUSIVE_CHECKS, 3);
+  assert.equal(settledDefault(pending, 0), null);
+  assert.equal(settledDefault(pending, 1), null);
+  assert.equal(settledDefault(pending, 2), DEFAULT_CPU_STT_MODEL, "the third inconclusive check settles on the CPU model");
+  assert.equal(settledDefault(new Error("consent"), 5), null, "only inconclusive checks settle the default");
+  const empty = withDefaultSttModels(preferencesSchema.parse({}), interimListeningModel(pending));
+  assert.equal(empty.dictationModel, ""); assert.equal(empty.voiceInputModel, "");
+  console.log("PASS a pending GPU check keeps built-in listening and settles after three inconclusive checks");
+}

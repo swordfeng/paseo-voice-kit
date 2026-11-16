@@ -1,5 +1,75 @@
 # Speech model evaluation
 
+## Windows Vulkan 0.6B Q4 compatibility check
+
+Native Windows 11 x64, Ryzen 5950X, RTX 5090, NVIDIA 616.56, 2026-11-14.
+The 0.1.1 candidate at `55d84e20c2913bc8858468686d0d396f7d1f3a1f`
+used qwentts.cpp `f1a6924789883bd92eeb59176793a94af55730b3` and ggml
+`0d403add5cb6329935290f02462e1072045aacd2`.
+
+Whisper base and Qwen TTS 1.7B Q8 generated correct speech using Vulkan.
+Qwen TTS 0.6B Q4 loaded on Vulkan but exhausted all 1200 frames rather than
+ending normally: 2,304,000 samples at 24 kHz, exactly 96 seconds of rejected
+audio. The worker's existing error combines empty and token-limited audio;
+the sample-count diagnostic establishes that this case was token exhaustion.
+
+Single-variable tests kept the original package, model, input and seed:
+
+| Vulkan setting | Chinese short sentence |
+|---|---|
+| Default | HTTP 503, token limit reached |
+| Disable coopmat2 | Same failure, 18.562s inference wall time |
+| Disable F16 | Same failure, 24.032s inference wall time |
+| Disable MMVQ | Correct 2.640s speech, 0.907s inference wall time |
+
+This isolates the failing MMVQ execution/activation-conversion path, without
+proving a particular shader defect or FP16 overflow. Talker prefill taps and
+the first three talker logits were finite in an instrumented control; those
+taps do not inspect the code predictor's direct graph. The MMVQ path converts
+F32 activation vectors to Q8_1; disabling it retains float-vector matvec on
+Vulkan. Flash attention remains enabled.
+
+The compatibility workaround applies to Qwen workers requesting a GPU on
+Windows and Linux (Vulkan; macOS uses Metal), when talker GGUF metadata identifies a 1024-wide Qwen3-TTS model containing
+Q4_K tensors. It is set before backend initialization and does not use filename
+matching. Explicit disable/force environment variables are preserved using
+ggml's presence-based semantics. The current 1.7B Q8 model is not matched.
+This is a bounded workaround verified on this host, not a general kernel fix.
+
+The same RTX 5090 under WSL (Fedora 45, Mesa 26.2.6 Dozen, `c4122de`) shows
+the same fault: with MMVQ on, a short Chinese and a short English sentence ran
+to their frame caps on seeds 42 and 7; with `GGML_VK_DISABLE_MMVQ=1` both ended
+normally (zh 90,240 samples in 21.8 s including the first load, en 82,560
+samples in 2.4 s) and Whisper read them back exactly. ggml's
+`test-backend-ops` on Dozen: ARGSORT 46 pass, 0 fail (ne0 = 2048 is reported
+unsupported, so not run there); TOP_K 533 pass, 0 fail.
+
+With the bypass built in (`680c250`, no environment overrides) on the same WSL
+host: 0.6B Q4 zh 20.5 s (first load included) and en 2.0 s; the 7 voices × 6
+sentences matrix at 0.4/42 ended normally 42 of 42 with no `token_limit` and no
+retry (median 3.0 s, max 21.7 s including each voice's first load, 251 s in
+all); 1.7B Q8 zh 34.1 s (first load) and en 2.3 s. Every output was read back
+by Whisper. All ran on `Vulkan0` (Dozen).
+
+The final native regression (`scripts/smoke-real-models.py --accelerator auto
+--expect-gpu --large-qwen --no-downloads`, with explicit model/output paths)
+completed in 17.74s. Actual device metadata and native logs confirmed Vulkan
+for Whisper and both Qwen GGUF models. Both Qwen models passed English/Chinese
+ASR content read-back and byte-identical repeated fixed-seed Chinese output.
+The 0.6B Chinese audio was 2.640s at speed 1 and 2.112s at speed 1.25; 1.7B was
+2.000s and 1.608s. These are short correctness checks, not benchmark rankings.
+Each inference was bounded at 60 seconds and the full run at 300 seconds.
+CPU regression retained the original 0.6B WAV output. No microphone or human
+playback assessment was performed.
+
+The candidate's sherpa runtime separately reports only CPUExecutionProvider
+and falls back to CPU for explicit CUDA/DirectML requests. Those models are
+not counted as GPU successes; this worker workaround does not add ONNX GPU
+providers. Complete host-specific logs and samples remain in the independent
+Windows validation directory rather than the repository or model-selection UI.
+
+## Mac multilingual evaluation
+
 Measured on Apple M6, 2026-11-13. FLEURS test split pinned to revision
 `70bb2e84b976b7e960aa89f1c648e09c59f894dd`: 15 distinct sentences per language,
 32 languages, 480 recordings. Exact sentences, clip names, durations and original
@@ -208,6 +278,99 @@ still needs listening evaluation.
 
 ## Real-model CPU checks for 0.1.1 (2026-11-14)
 
+### Windows process memory accounting
+
+Mac integration check after merging the Windows fixes with first-use loading:
+46 native tests passed (3 fixture tests ignored); the real VAD and missing-detector
+recovery fixtures were then run explicitly and passed. Type checking, behavior suites
+and plugin package verification passed. Four real-model checks completed in 11.03 s
+on Apple M6 with no downloads: Whisper base and Qwen TTS used Metal, Qwen ASR and
+Supertonic used CPU. Each server started with its configured engines unloaded but
+available; first requests succeeded. Qwen ASR preserved the Chinese fixture after
+40 and 100 seconds of leading silence. Qwen TTS speed 1/1.25 and repeated-seed
+checks passed. This is a short integration smoke, not a fresh Windows hardware run.
+
+Voice Kit's host status now samples Windows working sets and per-process GPU
+memory through read-only CIM queries, without requiring `nvidia-smi`, an
+administrator token, or a separate runtime installation. It sums the speech
+server's process tree plus the plugin process once, excluding the Paseo daemon,
+other agents/plugins and the PowerShell sampler. Creation times reject descendants
+whose parent PID has been reused. One hidden, bounded PowerShell process collects
+both snapshots; requests share a pending sample and a ten-second cache. A replaced
+server PID invalidates both RAM and GPU data.
+
+`memoryBytes` is the sum of resident working sets (RSS-style accounting, not
+unique/private bytes). `gpuMemoryBytes` and `gpuSharedMemoryBytes` respectively
+sum `DedicatedUsage` and `SharedUsage` from
+`Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory`, restricted
+to those same owned PIDs across adapters. `gpuMemorySource` identifies the
+Windows process counters. Shared GPU system RAM is never presented as dedicated
+VRAM or added to RSS. These are OS-reported process counters, not whole-device
+usage or guaranteed unique physical allocations; shared allocations can appear
+in more than one process, and provider refresh can lag model loading. Missing
+providers, failed queries or invalid measurements yield null, whereas a successful
+query with no owned GPU allocations yields zero. Other platforms keep their
+existing RAM collectors and report GPU process accounting unavailable.
+
+Native Windows 11 / RTX 5090 spot check: idle TTS process tree reported
+1,463,795,712 bytes RAM and 270,336 dedicated GPU bytes. A short Chinese Qwen
+Vulkan synthesis increased both, and its daemon dictation round trip returned
+the complete input. After the counters settled, the plugin returned
+2,547,732,480 RAM bytes, 2,218,504,192 dedicated GPU bytes and 17,379,328 shared
+GPU bytes. An independent Windows query matched both GPU totals exactly and
+reported 2,548,121,600 working-set bytes (sampling-time difference). Two
+authenticated clients read identical cached measurements. Type checking and the
+behavior suites passed, including process ownership, multiple adapters,
+unavailable/empty counters, overflow, coalescing and PID invalidation.
+
+The sidebar keeps devices and memory on separate lines so the figures are not
+dropped to fit its 120-pixel status slot. With active GPU execution, measured
+Windows dedicated memory and discrete-only device metadata, memory is shown as
+dedicated GPU bytes + resident bytes, in that order. iGPU/unified, hybrid or
+unknown device metadata, missing GPU counters and CPU-only execution retain one
+resident-memory figure; shared GPU memory is never added to it. These are separate
+accounting figures, not a newly calculated total. The classification follows the
+service host's devices, not the client OS. English/Chinese summary regressions
+cover this order and the single-value cases, plus exception-state precedence.
+
+### Qwen3-ASR idle microphone regression (native Windows)
+
+A 2.8-second Chinese fixture asking whether the fix can be pushed was correctly
+recognized without padding. With the same weights and input on CPU, 40 seconds
+of leading silence produced empty text (4.969 seconds wall time); 100 seconds
+produced the literal `language` (8.734 seconds). These are controlled recordings,
+not retained microphone audio from the original incident. Session logs showed
+104.32 and 47.872 seconds uploaded for speech intervals of about 4.33 and 3.33
+seconds; upload duration must not be confused with recognition wall time.
+
+Qwen3-ASR now uses the existing Silero speech filter before recognition, retaining
+the first-to-last speech span, all internal pauses and 300 ms boundaries. It does
+not change transcript parsing or suppress the ordinary word `language`. Other
+Sherpa families are unchanged. The shared dependency predicate covers loading,
+installed state and download dependencies, including custom Qwen entries. Startup
+downloads notify recovery so an early missing-VAD failure does not remain cached
+after the dependency arrives; unused engines remain unloaded. Offline installations need the small
+Silero model in the private model directory or a configured reuse directory.
+
+On the same native Windows machine, filtered 40/100-second leading-silence cases
+returned the complete Chinese sentence in 1.079/1.531 seconds. Trailing silence,
+a partial final VAD block, English, short Chinese/English, quiet speech (peak
+0.030 and 0.00897), a three-second internal pause, silence/noise followed by valid
+speech, and concurrent requests passed. Missing-detector recovery passed using
+installed ASR weights, without restarting the process. The 100-second padding
+cases are also covered by `scripts/smoke-real-models.py`.
+
+The final CPU core-model smoke took 18.31 seconds. The GPU regression took 17.59
+seconds with actual Vulkan Whisper and Qwen TTS 0.6B/1.7B, repeated-seed and speed
+checks; Qwen ASR and Supertonic remained on CPU. The running plugin's real daemon
+dictation interface recognized the padded Chinese fixture and English, and its
+preview RPC synthesized both languages. No microphone/playback listening test was
+performed. This mitigates the recognizer failure; it does not repair Paseo's
+recording-buffer lifecycle or remove earlier speech/assistant echo inside a buffer.
+Later real-session follow-ups still returned `language` and intermittently stalled
+recording/detection. Those issues remain unresolved. A separate cross-client settings
+display discrepancy recovered after plugin reload, with no settings-sync code fix.
+
 `scripts/smoke-real-models.py` runs short real inference against an unpacked native
 package, never installed into Paseo, with `--accelerator cpu`. It downloads only the pinned
 built-ins it uses. CPU is intentional for portable CI; on Macs, CPU workers now skip Metal
@@ -251,3 +414,572 @@ test-only change), and an Intel Mac model download timed out before inference. B
 passed in focused runs. The tagged 0.1.1 release must pass its own gates. The checks are
 short content and timing checks in English and Chinese, not quality scores for every
 language, and the times are from shared CI runners.
+## First-use model loading (2026-11-14)
+
+Local Apple M6 check with the release build (`coreml` feature, Neural Engine disabled,
+automatic acceleration): installed models remain unloaded at startup and are available
+to receive their first request. Status queries, download completion, recovery ticks and
+optional encoder completion leave unused models unloaded. Existing idle unloading remains.
+The native suite passed 46 tests (2 local fixture tests ignored).
+
+An isolated server with Whisper turbo Q5 and Supertonic 3 stayed unloaded through status
+queries and a two-second idle check. Server RSS was 42.6 MB. One short English synthesis
+followed by transcription returned the expected sentence; Whisper used Metal. First
+recognition took 0.83 s including 147 ms loading. This is one smoke sample, not a latency
+benchmark.
+
+After deploying the same binary and reloading the live plugin, total reported RSS was
+342 MB (plugin process plus speech server and owned workers), with STT and TTS unloaded
+and all three speech sites active. Plugin preview plus the configured dictation endpoint
+completed an English round trip; first recognition took 1.32 s including 201 ms loading,
+using Metal. Preferences were unchanged. The plugin was reloaded again after verification
+to leave the installation unloaded; its final reported total was 305 MB, with all three
+speech sites active. These observations do not revalidate other platforms.
+
+## Shared ASR speech filtering (2026-11-14)
+
+Silero filtering wraps local whole-utterance recognizers at the runtime boundary,
+rather than being duplicated inside Whisper and Qwen's Sherpa adapter. It initially
+used a family whitelist, then was made the default for all local ASR (Whisper and
+every Sherpa ASR family, including custom models). The whitelist reflected limited
+test coverage, not an observed incompatibility. Remote services keep their original
+input. Existing 300 ms edge padding and internal pauses are unchanged. The filter
+shares its recognizer's first-use load and idle unload. Native dependency checks
+cover all catalogued local ASR, unknown custom families, and exclusion of TTS,
+remote services and the internal VAD resource. Actual model checks below cover
+Whisper, Qwen ASR, SenseVoice and Paraformer; other models were not inferred anew.
+
+Apple M6, no downloads: compared the previous unfiltered SenseVoice int8 and custom
+Paraformer zh-small against the wrapped recognizers using the same local TTS WAVs.
+Seven baseline cases covered Chinese, a quiet Chinese copy rescaled to peak 0.03,
+short Chinese “可以。”, and English on SenseVoice. All seven normalized transcripts
+matched after filtering. Four additional checks passed: each model recognized the
+Chinese clip with 40 seconds leading and 10 seconds trailing silence, and the short
+clip with 10 seconds leading and 2 seconds trailing silence. Each isolated server
+started with recognition unloaded but available. The run had a 120-second budget
+and normal request timeouts; no transfer, timeout or microphone capture occurred.
+
+The 46 native tests passed (3 fixture tests ignored). Real VAD/adapter and Qwen
+missing-dependency recovery fixtures were also run explicitly and passed. The adapter
+fixture verifies that silence/noise skip the recognizer, speech still passes after
+rejection, language/prompt and accelerator are retained, and timing stages survive.
+These short synthetic-speech samples do not establish recall for every language,
+whispered speech, brief interjections or difficult background noise.
+
+The existing four-core-model integration smoke also passed in 10.77 seconds:
+Whisper base and Qwen TTS used actual Metal, Qwen ASR and Supertonic used CPU.
+Qwen ASR's 40/100-second silence regressions, TTS repeated seed and speed checks
+passed. This was a local Mac check, not a new Windows or Linux hardware run.
+
+## Native Swift MLX worker experiment (2026-11-14)
+
+`server/mlx-worker` is a standalone feasibility experiment, not the production
+MLX engine. It reuses the framed stdin/stdout protocol with a persistent Swift
+process. Rust worker selection, installation, dependency notices and the Python
+setup flow have not been migrated. No running plugin or user settings changed.
+
+The build pins `Neywa-Labs/mlx-audio-swift` to
+`209e1cb45498c5b7b4b96d417f9b15fe71d440f5`, MLX Swift to 0.33.0, and transitive
+dependencies in `Package.resolved`. It built in release mode with Xcode 27.2 /
+Swift 6.4.2 and the Metal Toolchain on the local Apple M6 Mac. The native worker
+does not launch Python. MLX's generated Metal resource bundle must accompany it.
+
+All weights were already installed. Tests used private APFS clones because the
+upstream Swift loader may write tokenizer files or clear a malformed cache
+directory. The user's model folders were not passed to that loader. The worker
+validates the speech-tokenizer directory before loading. A malformed-directory
+fixture returned a framed error and preserved its sentinel/tokenizer files.
+The worker requires MLX's GPU
+default device, reports Apple M6 / `metal`, and completed real GPU inference;
+creating a Metal device alone was not treated as a successful test.
+
+`server/mlx-worker/smoke.py` runs one owned worker at a time, with a 60-second
+startup budget, 60 seconds per utterance and 10 seconds to exit on stdin EOF.
+Failure terminates that worker's process group. It saves framed-protocol results,
+WAVs and stderr. Swift and the existing private Python worker (`mlx-audio` 0.6.5)
+used the same 0.6B 4-bit CustomVoice weights, Serena, explicit English/Chinese,
+0.4-second chunk intervals and a 1200-token ceiling. Sampling settings were
+temperature 0.9, top-k 50, top-p 1 and repetition penalty 1.05. No seed or
+bit-identical parity was assumed. Swift additionally requires the configured EOS
+token: the upstream text-length-dependent generation cap must not silently
+produce a successful truncated clip.
+
+The phrases were “Hello, this is a speech test.” and “你好，这是一个语音测试。”.
+Both workers' saved WAVs were transcribed correctly by an isolated native
+Qwen3-ASR server with the shared VAD filter. Swift also passed one English sample
+with 0.6B 8-bit and 1.7B 4-bit weights. Every tested worker exited successfully on
+EOF; repeated Swift launches completed without retaining the old worker process.
+
+These are single short observations, not a statistically controlled benchmark.
+The 0.6B 4-bit comparison after the first Swift execution was:
+
+| Worker | Language | Audio seconds | First PCM chunk seconds | Complete PCM seconds |
+| --- | --- | ---: | ---: | ---: |
+| Python | English | 3.12 | 0.299 | 1.263 |
+| Python | Chinese | 2.72 | 0.165 | 0.995 |
+| Swift | English | 2.88 | 0.215 | 1.487 |
+| Swift | Chinese | 3.28 | 0.203 | 1.323 |
+
+Python startup was 2.081 seconds; the restarted Swift worker took 0.259 seconds.
+After these requests, Python RSS was about 1.95 GB and Swift RSS about 1.83 GB.
+RSS is not total unified-memory use: Swift separately reported about 2.41 GB peak
+MLX active allocation, and these counters must not be added together. First-chunk
+time is worker output timing, not application playback latency. Output lengths
+differ because sampling and implementation differ.
+
+The **first-ever Swift execution** was substantially slower: 2.018 seconds to
+load, 8.457 seconds to first PCM and 10.414 seconds to complete a 5.76-second
+English clip. A later fresh-process check using the retained smoke harness also
+took 6.352 seconds to first PCM and 7.533 seconds to finish a 2.88-second clip,
+despite loading in 0.548 seconds. Its Python counterpart took 0.184 seconds to
+first PCM and 1.004 seconds to finish a different, 2.64-second sample. Swift's
+startup/request latency therefore remains inconsistent. Cache state was not
+controlled and the source of these stalls was not traced; the faster observation
+must not be advertised as representative cold-start latency.
+The additional 0.6B 8-bit and 1.7B 4-bit English clips took 1.755 and 1.049
+seconds to finish, respectively, with different generated durations. These
+samples do not establish a performance ranking between model sizes.
+
+The experiment establishes that a separate native Swift worker can reuse these
+weights and remove Python from this inference path. It does not establish
+voice-quality parity, long-text reliability, every speaker/language, minimum-OS
+compatibility or production packaging. The community Qwen implementation remains
+a dependency to pin and validate; this result is not a claim of library maturity.
+Follow-up instrumentation and a controlled cold-compilation comparison are
+recorded below.
+
+### Existing GGUF versus Python MLX: fresh-worker spot check
+
+A subsequent bounded comparison used the installed production GGUF worker and
+the existing Python MLX worker, one at a time on the same M6, with 0.6B
+CustomVoice 4-bit models, Serena and the same English/Chinese phrases above.
+Both workers reported actual Metal. Each was newly launched, but OS file and
+shader caches were not cleared. The first request was English, followed by
+Chinese in the same worker. These are production defaults: GGUF uses temperature
+0.7 / seed 42, while Python MLX uses its existing sampling configuration.
+Q4_K_M and MLX affine 4-bit are different quantizations, and their codec weights
+also differ; this does not isolate framework overhead alone.
+
+| Worker | Load seconds | First English complete seconds, excluding load | Load plus first English seconds | English audio seconds | RSS after English |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GGUF C++ | 1.553 | 1.271 | 2.824 | 2.96 | 2.866 GB |
+| Python MLX | 1.297 | 1.028 | 2.325 | 2.80 | 1.950 GB |
+
+The Chinese requests took 1.151 seconds (GGUF, 2.88 seconds of audio) and 1.164
+seconds (Python MLX, 3.20 seconds of audio). Python MLX emitted its first English
+PCM chunk after 0.178 seconds excluding load. The current GGUF wrapper emits one
+complete PCM frame after synthesis, so its first-chunk and completion times are
+effectively identical. The application currently collects full MLX audio too;
+worker first-chunk timing is not user playback latency.
+
+Memory uses the same `ps` RSS counter for each worker alone, in decimal GB,
+excluding the common plugin/server overhead. These snapshots are not peak or
+unique physical/unified-memory measurements and must not be added to GPU
+allocation counters. GGUF logged a 4096-position talker KV cache of 896 MB before
+any request, illustrating why a smaller quantized file need not have lower
+runtime RSS. No cache configuration was changed. Both workers exited on EOF.
+
+A separate Qwen3-ASR read-back matched both Chinese samples and the Python
+English sample. It rendered the GGUF English sample as “Hello. This is output
+speech test.”; this round trip was not exact and does not identify whether TTS
+or ASR caused the discrepancy. These timings are not a speech-quality comparison.
+
+In this single fresh-worker sample, Python MLX completed the first utterance
+slightly sooner and had lower RSS. This does not establish a universal speed or
+memory ranking, nor does it reproduce the separate Swift first-request stalls.
+
+Source inspection clarified the cache comparison: the GGUF talker allocates
+FP32 K/V tensors for 4096 positions and immediately clears the entire backend
+buffer. The selected shared Metal path implements this as `memset` over the whole
+allocation, so it is not merely an untouched virtual-address reservation. Reset
+only rewinds sequence length; it does not release this buffer. The log labels
+896 "MB", but its divisor is 1024 squared: the capacity is actually 896 MiB.
+
+The installed Python MLX implementation grows KV capacity in 256-position blocks
+and preserves the incoming tensor dtype. A separate GPU prefill-only probe
+(30-second process budget, deliberately stopped at the first KV update) observed
+both K and V as **bfloat16**, shape `[1, 8, 19, 128]`. This verified dtype without
+generating a long utterance. At equal batch, architecture and 4096 positions,
+raw talker K/V payload would therefore be 896 MiB for the current FP32 GGUF
+implementation and 448 MiB for BF16 MLX. This is a tensor-size calculation, not a
+measured full-context process-memory comparison. Equal dtype and dimensions
+would give equal raw KV payload, independent of the framework.
+
+Valid-token occupancy, live allocation, allocator-reusable cache, and OS RSS are
+different concepts. The 0.916 GB RSS difference above does not establish an
+intrinsic 32% memory advantage for MLX at every sequence length, nor was its
+entire difference attributed experimentally to KV alone.
+
+### Swift follow-up: cold Metal compilation and token budget
+
+The earlier stalls were investigated rather than treated as evidence that Swift
+cannot run the model. This remained an isolated experiment on the M6; the live
+plugin and its Python runtime were not switched. Its Python MLX version is
+0.32.4, while the Swift package uses MLX 0.33.0, so neither runtime nor cache
+history was identical in the earlier cross-framework comparison.
+
+Opt-in worker diagnostics now record first token, audio arrival and generation
+time on stderr without logging request text. `VOICEKIT_MLX_SEED=42` explicitly
+seeds the MLX random state before each request. The pinned Qwen Swift path does
+not itself forward `GenerateParameters.seed`, so setting that field alone would
+not provide controlled sampling. The persistent worker still processes requests
+serially and exits on EOF.
+
+A real failure also appeared during profiling: the Chinese short phrase hit
+exactly 75 generated tokens without EOS. Upstream silently reduced the caller's
+1200-token budget to `min(maxTokens, max(75, textTokenCount * 6))`. The worker
+correctly reported truncation. The tracked
+`respect-requested-token-limit.patch` removes this text-length heuristic and
+honors the explicit caller budget. The build helper checks the immutable source
+revision and applies this patch idempotently. The 1200-token ceiling, EOS guard
+and parent process deadlines remain; removing the heuristic does not guarantee
+that every possible input will terminate correctly or retain speech quality.
+
+An optional C++ diagnostic patch timed MLX Metal source-library compilation and
+slow pipeline creation. To exercise a cold source-cache path without deleting
+shared system caches, it added a process-unique comment to runtime-generated
+Metal source. Kernel operations, weights, prompt and seed were unchanged. This
+was a deliberate cache-miss experiment, **not normal production timing**.
+
+| Fixed-seed English experiment | Metal compilation logged after request | First PCM seconds | Complete PCM seconds | Audio seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Existing source cache | 0.017 s | 0.172 | 1.024 | 2.80 |
+| Unique-comment cold source | 5.701 s | 5.850 | 6.735 | 2.80 |
+
+Both saved WAV files were byte-identical (SHA256
+`350dc732b9e1f42931a8b2d7e6e93f167f50ac4f6cb2ff5345614730af4cff21`).
+The cold run spent about 3.73 seconds before its first generated token; additional
+decoder kernels compiled before the first audio chunk. Thus cold Metal
+compilation demonstrably causes a stall of the same scale as the earlier
+observations, without changing the output. The historical slow runs had no such
+trace, so this is strong support for that explanation rather than proof that
+every earlier or future stall has the same cause. Shared OS caches were left
+intact. Disabling MLX graph compilation was also tried: first PCM was 0.496 s and
+completion 1.357 s in that check, with new unfused-kernel compilation; it did not
+improve the measured first request and was not adopted.
+
+The diagnostic C++ changes were then reversed, the original MLX checkout was
+verified clean, and the normal worker was rebuilt with only the token-budget
+patch. Two fresh worker processes, each seeded 42 per request, completed:
+
+| Normal build | Load seconds | English first / complete seconds | Chinese first / complete seconds |
+| --- | ---: | ---: | ---: |
+| Process A | 0.656 | 0.165 / 0.954 | 0.137 / 1.180 |
+| Process B | 0.285 | 0.194 / 1.199 | 0.174 / 1.389 |
+
+Both used actual Metal, produced byte-identical corresponding WAVs across
+processes, and exited on EOF. Qwen3-ASR read the English and Chinese samples back
+correctly. Post-request worker RSS was about 1.83 GB. Model weights were private
+copies; no download, global cache purge or long-model stress run occurred.
+
+This supports continuing with a native persistent Swift worker. Cold compilation
+cost remains possible after a cache miss or version/device change; ordinary
+fixed-seed fresh-process requests in the final checks were fast. No model warmup
+was added to application startup. Production packaging, runtime selection and
+removal of the Python setup flow remain separate implementation work.
+
+## Bundled native MLX migration (2026-11-15)
+
+The production MLX path now uses the bundled Swift worker. The Python worker and
+installer were removed. Native packages include the Metal library, resource
+bundles, relocated Swift compatibility dylibs and upstream notices. Model weights
+remain separate. The pinned loader additionally constructs tokenizers in memory
+and never writes or removes model directories. Generation defaults to seed 42.
+
+47 native tests passed (3 local-fixture tests ignored), as did plugin typechecking,
+behavior checks, four Python build tests, plugin-package compilation and native
+archive extraction/dependency checks. The four-core-model smoke passed in 12.51 s;
+Whisper and GGUF used Metal. The new bounded native HTTP check passed from both
+the relocated archive and installed binaries with Python paths disabled: English
+and Chinese round trips, repeat-identical audio, and speed 1.25 (2.80 to 2.24 s).
+The model began unloaded. A private model clone without tokenizer.json had
+read-only permissions and its file inventory/metadata remained unchanged.
+Additional single English samples from 0.6B 8-bit and 1.7B 4-bit weights ran on
+Metal and transcribed correctly. The first newly packaged run still showed cold
+compilation delay; no startup model warmup was introduced.
+
+Dyld diagnostics confirmed the compatibility dylib loaded from the extracted
+package, with no toolchain dylib dependency. The locally built archive was about
+32 MB. This was tested on M6/macOS 27; the target minimum remains macOS 14, without
+a new real-device macOS 14 or remote CI run. Claude checked real client components
+in a temporary harness at desktop/compact widths and light/dark themes, including
+ready/error states; this was not a native-app installation E2E on other platforms.
+
+The packaged binary and plugin sources were deployed locally with rollback copies.
+The live plugin reported running, all three speech sites active, and the native
+MLX helper ready. Installed-binary MLX HTTP checks and live preview/Whisper Metal
+recognition passed. Plugin preferences were unchanged. A final plugin reload left
+all configured models unloaded. No Paseo daemon restart, push or release occurred.
+
+### MLX sampling adjustment (2026-11-15)
+
+MLX initially retained temperature 0.9 while GGUF's main sampler used 0.7; both
+used seed 42. After a report of added laughter/playful delivery, short MLX tests
+compared temperature 0.7 and the user-approved fallback 0.6, keeping seed 42.
+Both passed native Metal synthesis, repeat-identical audio, tempo and read-only
+model checks. English read-back matched. Chinese read-back at 0.7 added a final
+“啊”; at 0.6 it rendered “您好” rather than the input “你好”. These differences
+do not distinguish synthesis errors from ASR errors, nor assess laughter.
+The deployed MLX default is now 0.6/42 for audition; GGUF main sampling remains
+0.7/42. Listening is required to judge whether expressiveness has improved.
+The native helper was replaced with rollback retained and only the plugin was
+reloaded. Existing plugin preferences were unchanged.
+
+### Shared Qwen sampling policy (2026-11-15)
+
+For the user's next audition, both GGUF and MLX now receive temperature 0.2 and
+seed 42 from one shared request builder in `server/src/engine/mod.rs`. Workers
+require those IPC fields rather than maintaining independent defaults; the MLX
+seed environment override is removed. GGUF's acoustic talker now follows the same
+temperature as its main talker, matching MLX's use of the generation temperature
+for both. Both retain top-k 50, top-p 1 and repetition penalty 1.05.
+
+47 native tests passed (3 local-fixture tests ignored). Short real Metal runs
+passed for both backends, with identical repeated English audio in each backend.
+MLX's English and Chinese read-back matched the test phrases, and tempo, initial
+unloaded state and unchanged model files passed. GGUF generated valid English and
+Chinese PCM; that short run did not transcribe them. These checks establish
+function, not whether the lower temperature improves delivery. Both workers and
+the server were deployed together with rollback copies retained; only Voice Kit
+was reloaded, and saved preferences were preserved.
+
+### Long-reply generation at temperature 0.2 (2026-11-15)
+
+The live MLX readout of the 235-character Chinese weekend paragraph failed with
+`speech token or audio limit reached`. The speech server remained up; its worker
+error rejected the response rather than returning truncated audio. MLX previously
+grouped up to 240 characters per generation, GGUF 160. An isolated 80-character
+policy passed that paragraph on MLX but still hit the 1200-token/96-second limit
+on GGUF at the same 0.2/42 sampling policy.
+
+Both backends now share sentence-by-sentence generation with an 80-character
+ceiling, clause/whitespace breaks for oversized sentences, and complete PCM
+assembly. Token/audio limits and 0.2/42 are unchanged. The exact previously failed
+paragraph passed on real Metal with both engines: MLX 53.04 seconds of audio,
+GGUF 52.08 seconds. Read-back of each first/last 12-second excerpt included the
+opening morning scene and the final weekend sentence. This checks endpoints,
+not word-for-word correctness of the entire paragraph; the full clip exceeded
+this Qwen-ASR ONNX export's 512-token audio context. 47 native tests passed,
+3 local fixtures ignored. The server was deployed with rollback retained and
+only the plugin reloaded; saved preferences were preserved.
+
+### Model-token text budgets (2026-11-15)
+
+The temporary 80-character ceiling is replaced by a shared budget of 64 text
+tokens per sentence/fragment. Both private workers count using the same loaded
+text tokenizer as synthesis, without a second vocabulary or another runtime.
+Counts cover the input text, not the model's conditioning template. Oversized
+sentences prefer clause/word boundaries; candidate prefixes are measured again
+because BPE counts need not be monotonic. UTF-8 boundaries and all source text
+are preserved. An independent 8 KB probe limit keeps escaped private IPC JSON
+under its existing frame bound. This is a conservative input policy, not a
+conversion from text tokens to speech duration; generation caps remain unchanged.
+
+`scripts/check-qwen-tokenizers.py` ran with a 60-second total budget on the existing
+0.6B models, with both workers reporting Metal. EN/ZH/JA fixtures of 29/12/15
+characters counted as 8/6/8 tokens in both backends. A 415-character English
+fixture counted as 91 tokens. Counts were stable after intervening queries.
+49 native tests passed (3 local fixtures ignored), including token-based versus
+character-based budgeting, oversized IPC probes, Unicode preservation, decimal
+sentence boundaries, and tokenizer failures.
+
+The previous 235-character Chinese failure case again passed on both engines,
+with the same 53.04/52.08-second MLX/GGUF outputs and endpoint read-back checks.
+A 354-character English sentence exercised over-budget splitting on both engines
+(2 generations per engine), producing 29.76/27.60-second outputs. First/last
+12-second excerpts included the river at the beginning and city history at the
+end. These are endpoint and function checks, not word-for-word quality scores.
+Temperature 0.2 and seed 42 are unchanged. Deployment replaces both workers and
+the server together, retains rollback, and reloads only Voice Kit.
+Live verification found all three speech sites active, saved preferences unchanged,
+and a successful MLX Metal preview through the reloaded plugin.
+
+### Optional 0.6B instruction trial (2026-11-15)
+
+Both workers now accept an optional, separate style instruction via the shared
+`VOICEKIT_QWEN_INSTRUCTION` server environment variable. The normal default stays
+unset. A four-sample A/B trial used Serena, temperature 0.2, seed 42 and the same
+Chinese weather/walking sentence. The instruction requested calm, natural, steady
+delivery without laughter or added vocalizations. All four samples ran on Metal
+and transcribed back to the input sentence without reading instruction text.
+MLX baseline/instruction durations were 5.20/4.48 seconds; GGUF 11.52/4.88 seconds.
+Waveform hashes changed with conditioning in both backends. This demonstrates an
+effect on generation, not proven semantic instruction-following or calmer delivery;
+audition is needed. The short English alternative was supplied as text, not tested.
+49 native tests passed, 3 local fixtures ignored. Both workers and the server were
+deployed with rollback retained, no default instruction enabled, and preferences
+preserved while reloading only Voice Kit.
+
+### Approved instruction default and GGUF baseline silence (2026-11-15)
+
+After audition, the user preferred the Chinese instruction samples. That exact
+instruction is now the shared default for MLX/GGUF at 0.2/42; an explicit empty
+`VOICEKIT_QWEN_INSTRUCTION` still disables it for comparisons. The server was
+rebuilt, deployed with rollback, and only Voice Kit reloaded, preserving preferences.
+The live preview succeeded using the user's configured MLX Vivian voice; the A/B
+files used Serena, so their PCM hashes are not a valid equality comparison.
+
+10 ms RMS windows with three consecutive windows above 100 PCM16 units measured
+5.35 seconds of leading silence and 1.42 seconds trailing in `gguf-baseline.wav`,
+versus 0.27/0.31 seconds with its instruction. Thresholds 30 and 300 gave nearly
+the same boundaries. The WAV itself contains that delay; it is not playback or
+network startup. The first nonzero baseline sample is at 0.547 seconds, so a simple
+nonzero trim would miss most of the quiet region. This observation does not yet
+isolate model generation from decoder behavior. A comparison copy retained 250 ms
+around the detected voice, slicing 5.10–10.35 seconds; the original was retained.
+No automatic TTS silence-trimming behavior was added.
+
+### Common TTS output edge-silence handling (2026-11-15)
+
+All models now use one speech-API output policy after complete sentence assembly
+and tempo, before WAV/PCM encoding. Only an outer edge longer than 750 ms is
+shortened, retaining 250 ms around sustained activity. Detection uses 10 ms RMS
+windows, three consecutive active windows, and a threshold of 1% of the largest
+window RMS capped at 32 PCM16 units. The relative threshold protects quiet clips;
+silent/uncertain/non-finite inputs are left unchanged. No model is loaded for this
+step, and internal pauses and PCM samples within the retained region are unchanged.
+
+52 native tests passed (4 local fixtures ignored), including exact preservation
+of an internal 1.5-second pause, quiet speech, a soft attack inside the guard,
+natural edge pauses, all-silent clips and isolated clicks. The four saved A/B
+recordings were checked with the Rust fixture: GGUF baseline 11.52 to 5.27 seconds;
+GGUF instruction 4.88 unchanged; MLX baseline 5.20 unchanged; MLX instruction 4.48
+unchanged. These are boundary/function checks, not general speech-detection scores.
+An actual GGUF Metal HTTP run with instructions explicitly disabled reproduced
+the baseline and returned 5.27 seconds after automatic trimming. Read-back matched
+the sentence, and raw PCM matched the WAV sample data exactly. The rebuilt server
+was deployed with rollback retained; the plugin and live preview succeeded and
+preferences were unchanged. No daemon restart was used.
+
+### Shared multilingual TTS boundaries (2026-11-15)
+
+Language routing and both Qwen backends now use one source-preserving boundary
+module. Tests cover Latin/CJK punctuation, Arabic/Urdu marks, Indic danda,
+ellipsis, Unicode line/paragraph breaks, closing quotes and punctuation runs.
+Other regression cases preserve decimals, version numbers, common abbreviations,
+initials, URLs including query strings, and email addresses. Mixed Arabic/Chinese
+and Hindi/English routing tests verify language separation without whitespace.
+Qwen's 64-text-token budget, sampling, instructions and output trimming are unchanged.
+
+55 native tests passed (4 local fixtures ignored). This uses conservative
+heuristics, not a complete linguistic parser; ambiguous abbreviations can remain
+joined. Same-language routing runs still merge. This change does not alter Paseo's
+separate playback segmenter or enable end-to-end streaming.
+The rebuilt server was deployed with rollback retained, then only Voice Kit was
+reloaded. All speech sites became active and preferences matched the pre-deploy
+snapshot. A live preview containing Chinese quotes and decimal 0.2 successfully
+synthesized through MLX Metal; no broad model evaluation was repeated.
+
+### Qwen3-TTS and Supertonic voice similarity (2026-11-15)
+
+The persona table paired each Qwen3-TTS voice with a Supertonic voice by gender and voice
+description only. This spot check measures those pairs with the current Qwen settings
+(temperature 0.2, default calm instruction), using the deployed 0.1.1 server built at
+02:32 from `c551ecb`.
+
+- Samples: one English sentence for every voice of both models ("The weather is lovely
+  today, so let's take a short walk by the river after lunch."), plus one two-sentence
+  Chinese passage for Qwen3-TTS. Qwen3-TTS 0.6B GGUF Q4 ran on Metal (`Talker backend:
+  MTL0`; status `metal`) and Supertonic 3 on the CPU. Rendering all 28 samples took 51 s.
+  1.7B was not measured.
+- Score: the same method as the earlier Supertonic–Kokoro pairing. Mean CAM++
+  (`campplus_zh_en.onnx`, `server/examples/voice_embed.rs`) cosine similarity of the
+  Supertonic English sample with the Qwen English and Chinese samples, minus
+  0.02 × the median-pitch difference in semitones.
+
+| Qwen voice | Current pair | Best Supertonic (score) | Current pair's score and rank |
+|---|---|---|---|
+| vivian | F1 | F1 (0.376) | 0.376, 1st of 5 |
+| serena | F3 | F1 (0.305), then F5 (0.212) | 0.146, 4th of 5 |
+| sohee | F5 | F1 (0.332), then F2 (0.196) | 0.138, 3rd of 5 |
+| aiden | M1 | M4 (0.091) | −0.019, 3rd of 5 |
+| ryan | M4 | M4 (0.082) | 0.082, 1st of 5 |
+| uncle_fu | M2 | M1 (0.156) | −0.066, 4th of 5 |
+
+- Supertonic F1 is the closest voice for every female Qwen voice, so F1 is generally the
+  most Qwen-like voice rather than a specific match. Each voice used once, the best female
+  assignment is vivian–F1, serena–F5, sohee–F2 (total 0.784, current 0.660). The best male
+  assignment is uncle_fu–M1, aiden–M4, ryan–M3 (0.274, current −0.003).
+- The matches are weak. Cross-model similarities are 0.1–0.38, lower than the
+  Supertonic–Kokoro pairs (0.16–0.43). Serena's own English and Chinese samples are no
+  closer to each other (0.312) than to another voice (0.314), so its result is the least
+  reliable. Ono Anna behaves the same way.
+- Median pitch is far apart. Female Qwen voices measured 222–229 Hz in English, against
+  165–190 Hz for Supertonic. Male Qwen voices measured 169–205 Hz, against 87–118 Hz. The
+  male figures are high for male voices, and the estimator may have picked a harmonic, so
+  listen before relying on them.
+- The default pairing (Mia: Supertonic F1, Qwen vivian) is the best measured pair from both
+  sides.
+
+Samples, embeddings and scores: `/tmp/vk-match-20261115/` (not kept in the repository).
+
+#### Serena follow-up with more sentences (2026-11-15)
+
+The single-sentence result for serena was unreliable, so serena was measured again with
+five sentences (three English, two Japanese; both models speak them). Each sample was
+compared with the same sentence from Supertonic F1–F5. The model and scoring are the same
+as above (0.6B GGUF Q4 on Metal). Median pitch was checked with a second estimator (YIN)
+next to the autocorrelation one.
+
+| Supertonic | Same-sentence similarity, mean ± sd | Centroid similarity | Pitch difference (semitones, YIN) | Score |
+|---|---|---|---|---|
+| F1 | 0.491 ± 0.088 | 0.563 | 4.7 | 0.398 |
+| F5 | 0.316 ± 0.075 | 0.381 | 6.8 | 0.179 |
+| F2 | 0.219 ± 0.066 | 0.249 | 3.5 | 0.148 |
+| F4 | 0.212 ± 0.069 | 0.254 | 4.1 | 0.129 |
+| F3 | 0.214 ± 0.066 | 0.241 | 5.9 | 0.095 |
+
+- F1 was the closest for all five sentences. Its centroid similarity to serena (0.563) is
+  close to serena's own similarity across sentences (mean 0.586). F3, the current persona
+  pair, scored lowest.
+- Both pitch estimators agree: serena 233/242 Hz, F1 181/185 Hz, so the pitch gap is real
+  and not a harmonic error.
+- Two runs hit the generation cap on Metal (0.6B Q4, temperature 0.2, seed 42): sohee on
+  "I checked the build logs this morning, and everything passed except one small test.",
+  twice, and serena on "Honestly, I think the second option is better, but let's hear what
+  everyone else says." Each produced 2 304 000 samples (1200 frames, 96 s) and was rejected
+  as "empty or token-limited audio". The worker's cooldown then failed the remaining
+  requests on that server. Those samples were rendered with a fresh server per voice.
+
+### Qwen generations that never end: temperature and seed (2026-11-15)
+
+Some Qwen3-TTS generations never produce the end token and run to the 1200-frame cap (96 s
+of audio, about 35 s on Metal). They were rejected as "empty or token-limited audio", and the
+cooldown that followed failed every later request on that server. All runs used the default calm
+instruction, Metal, and the six sentences of the serena follow-up above (four English, two
+Japanese). There was one server per voice, so one failure didn't hide the next. The voices were
+vivian, serena, ono_anna, sohee, aiden, ryan and uncle_fu (the dialect voices weren't tested),
+giving 42 generations per row. Temperature and seed came from diagnostic overrides
+(`VOICEKIT_QWEN_TEMPERATURE`, `VOICEKIT_QWEN_SEED`).
+
+| Model | Temperature | Seed | Generations that hit the cap |
+|---|---|---|---|
+| 0.6B GGUF Q4 | 0.2 | 42 | serena, sohee, aiden (3 of 7 voices; later requests on those servers failed in the cooldown) |
+| 0.6B GGUF Q4 | 0.4 | 42 | 0 of 42 (0 of 24 again with the frame cap below) |
+| 1.7B GGUF Q8 | 0.4 | 42 | 2 of 42 |
+| 1.7B GGUF Q8 | 0.4 | 7 | 0 of 42 |
+| 1.7B GGUF Q8 | 0.5 | 42 | 1 of 42 |
+| 1.7B GGUF Q8 | 0.5 | 7 | 0 of 42 |
+| 1.7B GGUF Q8 | 0.7 | 42 | 1 of 42 |
+| 0.6B MLX 4-bit | 0.4 | 42 | 0 of 24 (vivian, serena, sohee, aiden) |
+
+- Without the instruction, at 0.2, serena's failure went away but sohee's didn't, so the
+  instruction contributes but isn't the cause.
+- Failures with seed 42 repeat exactly. The three 1.7B cases, each at its own temperature, were
+  retried with seeds 7, 43, 1234 and 2026. 11 of 12 retries finished; seed 2026 failed sohee's
+  en3 at 0.5. A second seed recovered every case in this sample, but it isn't guaranteed.
+- Above 0.2 the cap is rare but not gone on 1.7B (1–2 of 42 per seed). The difference between
+  0.4 and 0.5 is one generation, too small to rank them.
+- With a cap set from each chunk's token count (0.8 s per token plus 4 s, at most 1200 frames),
+  a forced 0.2 failure on 0.6B GGUF stopped at 403 200 samples (16.8 s of audio) instead of
+  2 304 000. The next request on the same server succeeded, with no cooldown refusal.
+
+### Vocabulary prompt (2026-11-15)
+
+Whisper large-v3-turbo on Metal transcribed one Supertonic F1 clip of "Please open Paseo Voice
+Kit and check the settings." three times without and three times with the vocabulary "Paseo,
+Voice Kit". Without it, all three read "Passio Voice Kit"; with it, all three read "PaSeo Voice
+Kit". The vocabulary changes the output, and here brings the name closer, though not exact. A
+vocabulary written without the comma ("Paseo Voice Kit") gave "PaSeo" in one run and "PaaSio"
+in another.
+

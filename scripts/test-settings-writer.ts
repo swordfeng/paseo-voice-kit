@@ -13,6 +13,8 @@ class FakeStore {
   saves: { revision: string; ok: boolean }[] = [];
   failNext = 0;
   saveDelay = 5;
+  /** The host stops answering: saves never settle. */
+  hang = false;
   showDelay = 5;
   private n = 0;
   private listeners: (() => void)[] = [];
@@ -37,6 +39,7 @@ class FakeStore {
           setTimeout(resolve, 200);
         }),
       save: async (values: Prefs, revision: string) => {
+        if (this.hang) return new Promise<boolean>(() => undefined);
         await new Promise((r) => setTimeout(r, this.saveDelay));
         const ok = this.failNext > 0 ? (this.failNext--, false) : revision === this.doc.revision;
         this.saves.push({ revision, ok });
@@ -128,6 +131,21 @@ function setup() {
   void writer.update({ b: 1 });
   await writer.settled();
   expect(store.saves.every((s) => s.ok) && store.doc.values.a === 1 && store.doc.values.b === 1, "6 waits for the shown revision");
+}
+
+{
+  // A save that never answers is reported and dropped, so the screen shows the host's values
+  // (here written by another device) instead of the stuck change.
+  const store = new FakeStore();
+  const failures: WriteFailure[] = [];
+  const writer = new SettingsWriter<Prefs>(store.port(), () => {}, (f) => failures.push(f), () => null, 30);
+  store.hang = true;
+  void writer.update({ a: 5 });
+  store.external({ a: 9 });
+  await new Promise((r) => setTimeout(r, 300));
+  await writer.settled();
+  expect(Object.keys(writer.pending()).length === 0, "7 a save that never answers is dropped");
+  expect(failures.length === 1 && /timed out/.test(failures[0].reason ?? ""), "7 and reported as timed out");
 }
 
 console.log(failed ? `${failed} failed` : "all passed");

@@ -6,6 +6,7 @@ import type { CustomModel, Preferences } from "../shared/settings";
 import { hfTree, sherpaFiles, mlxFiles, hfBytes, type HfFile } from "./huggingface";
 import { qwenMetadata, QWEN_LANGUAGES, QWEN_VOICES } from "./mlx-models";
 import { paths } from "./paths";
+import { pruneKeys } from "./model-keys";
 import { BUILTIN_VOICE_MODELS, effectiveTts, voiceChainCatalog } from "./tts-chain";
 
 const USES = { stt: ["dictation", "voice_input"], tts: ["voice_output"] } as const;
@@ -32,7 +33,7 @@ function ggufMetadata(model: string, codec: string) {
 }
 
 /** voicekit catalog entry for a model the user added in settings. */
-export async function catalogEntry(model: CustomModel): Promise<Record<string, unknown> | null> {
+export async function catalogEntry(model: CustomModel, apiKeys: Record<string, { apiKey: string }> = {}): Promise<Record<string, unknown> | null> {
   const base = { id: model.id, kind: model.kind, label: model.label, uses: USES[model.kind], languages: model.languages ?? [] };
   if (model.source === "server") {
     if (!model.baseUrl || !model.model) return null;
@@ -40,7 +41,7 @@ export async function catalogEntry(model: CustomModel): Promise<Record<string, u
       ...base,
       description: "Forwarded to " + model.baseUrl,
       engine: "openai",
-      remote: { base_url: model.baseUrl, model: model.model, api_key: model.apiKey || undefined, voice: model.voice || undefined },
+      remote: { base_url: model.baseUrl, model: model.model, api_key: apiKeys[model.id]?.apiKey || undefined, voice: model.voice || undefined },
     };
   }
   // Whisper only recognizes speech; a voice entry pointing at one is skipped.
@@ -136,6 +137,7 @@ export async function catalogEntry(model: CustomModel): Promise<Record<string, u
  */
 export async function writeCustomCatalog(models: CustomModel[], preferences?: Preferences): Promise<{ path: string; hash: string; ttsModel?: string }> {
   const entries: Record<string, unknown>[] = [];
+  const apiKeys = await pruneKeys(models.map((m) => m.id));
   const unavailable = (model: Pick<CustomModel, "id" | "kind" | "label" | "languages" | "family">, reason: string) => ({
     id: model.id, kind: model.kind, label: model.label, uses: USES[model.kind],
     languages: model.family?.startsWith("qwen3_tts") ? QWEN_LANGUAGES : model.languages ?? [],
@@ -143,7 +145,7 @@ export async function writeCustomCatalog(models: CustomModel[], preferences?: Pr
   });
   for (const model of models) {
     try {
-      const entry = await catalogEntry(model);
+      const entry = await catalogEntry(model, apiKeys);
       entries.push(entry ?? unavailable(model, "Incomplete custom model configuration"));
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

@@ -110,12 +110,16 @@ impl TtsEngine for RemoteEngine {
         // whatever Paseo asked for.
         let body = serde_json::json!({ "model": self.remote.model, "input": req.text, "voice": voice, "response_format": "wav", "speed": req.speed });
         let started = std::time::Instant::now();
+        // The same split as recognition: an unreachable or refusing server is unavailable (the
+        // voice list cools it down), any other error concerns only this text.
         let bytes = self.handle.block_on(async {
-            let resp = self.auth(self.client.post(self.url("audio/speech"))).json(&body).send().await?;
-            if !resp.status().is_success() {
-                anyhow::bail!("remote speech failed: {}", Self::error_text(resp).await);
+            let resp = self.auth(self.client.post(self.url("audio/speech"))).json(&body).send().await.map_err(|e| self.transport(e))?;
+            let status = resp.status();
+            if !status.is_success() {
+                let message = format!("remote speech failed: {}", Self::error_text(resp).await);
+                return Err(if unavailable_status(status) { Unavailable(message).into() } else { super::RequestFailure { code: None, message }.into() });
             }
-            Ok(resp.bytes().await?)
+            resp.bytes().await.map_err(|e| self.transport(e))
         })?;
         timings.push("remote", started.elapsed().as_secs_f64() * 1000.0);
         timings.time("decode", || audio::decode_any(&bytes, Some("wav")))
@@ -155,6 +159,28 @@ mod tests {
         let audio = Pcm { samples: vec![0.0; 160], sample_rate: 16000 };
         let text = engine.transcribe(TranscribeRequest { audio: &audio, language: None, prompt: None }, &mut Timings::default()).unwrap();
         assert_eq!(text, "remote works");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn remote_speech_errors_are_unavailable_or_request_failures_like_recognition() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for (status, body) in [("200 OK", r#"{"data":[]}"#), ("503 Service Unavailable", r#"{"error":{"message":"busy"}}"#), ("400 Bad Request", r#"{"error":{"message":"bad input"}}"#)] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut buf = [0u8; 8192];
+                let _ = socket.read(&mut buf).unwrap();
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let remote = Remote { base_url: format!("http://{address}/v1"), model: "tts".into(), api_key: None, voice: None };
+        let engine = RemoteEngine::connect(&remote, rt.handle().clone()).unwrap();
+        let speak = || engine.synthesize(SpeakRequest { text: "hello", voice: "alloy", speed: 1.0, language: None }, &mut Timings::default()).unwrap_err();
+        assert!(crate::engine::is_unavailable(&speak()), "503: the server can't serve now");
+        assert!(crate::engine::is_request_failure(&speak()), "400: only this text");
         server.join().unwrap();
     }
 }

@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
+import { sampleWindowsMemory, type MemoryUsage } from "./windows-memory";
 const exec = promisify(execFile);
 
 /** ps RSS is KiB. Exclude the Paseo app, other plugins, agents and the sampler process. */
@@ -56,20 +57,31 @@ async function serverRss(pid: number): Promise<number | null> {
 }
 
 export class MemorySampler {
-  private cached: { pid: number | null; at: number; bytes: number | null } | null = null;
-  private pending: { pid: number | null; value: Promise<number | null> } | null = null;
+  private cached: { pid: number | null; at: number; usage: MemoryUsage } | null = null;
+  private pending: { pid: number | null; value: Promise<MemoryUsage> } | null = null;
   private generation = 0;
-  constructor(private options: { read?: (pid: number) => Promise<number | null>; own?: () => number; now?: () => number } = {}) {}
+  constructor(private options: { read?: (pid: number) => Promise<number | null>; readUsage?: (pid: number | null) => Promise<MemoryUsage>; own?: () => number; now?: () => number } = {}) {}
   sample(pid: number | null): Promise<number | null> {
+    return this.sampleUsage(pid).then(usage => usage.memoryBytes);
+  }
+  sampleUsage(pid: number | null): Promise<MemoryUsage> {
     const now = (this.options.now ?? Date.now)();
-    if (this.cached?.pid === pid && now - this.cached.at < 10_000) return Promise.resolve(this.cached.bytes);
+    if (this.cached?.pid === pid && now - this.cached.at < 10_000) return Promise.resolve(this.cached.usage);
     if (this.pending?.pid === pid) return this.pending.value;
     const generation = ++this.generation;
     const value = (async () => {
-      const speech = pid === null ? 0 : await (this.options.read ?? serverRss)(pid).catch(() => null);
-      const bytes = speech === null ? null : speech + (this.options.own ?? (() => process.memoryUsage().rss))();
-      if (generation === this.generation) this.cached = { pid, at: now, bytes };
-      return bytes;
+      const empty: MemoryUsage = { memoryBytes: null, gpuMemoryBytes: null, gpuSharedMemoryBytes: null, gpuMemorySource: null };
+      let usage: MemoryUsage;
+      if (this.options.readUsage) usage = await this.options.readUsage(pid).catch(() => empty);
+      else if (process.platform === "win32" && !this.options.read) {
+        const own = (this.options.own ?? (() => process.memoryUsage().rss))();
+        usage = await sampleWindowsMemory(pid, process.pid, own).catch(() => ({ ...empty, memoryBytes: pid === null ? own : null }));
+      } else {
+        const speech = pid === null ? 0 : await (this.options.read ?? serverRss)(pid).catch(() => null);
+        usage = { ...empty, memoryBytes: speech === null ? null : speech + (this.options.own ?? (() => process.memoryUsage().rss))() };
+      }
+      if (generation === this.generation) this.cached = { pid, at: now, usage };
+      return usage;
     })().finally(() => { if (generation === this.generation) this.pending = null; });
     this.pending = { pid, value }; return value;
   }

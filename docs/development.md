@@ -17,8 +17,11 @@ copied to a temporary name and renamed, so a running server keeps its old file u
 reload.
 
 Default Cargo features are `coreml` on macOS (Metal is always on) and `vulkan-dl` on
-Linux and Windows. Override them with `CARGO_FEATURES`; set it empty for a plain CPU
-build. If `sccache` fails in a sandbox, run with `RUSTC_WRAPPER=`.
+Linux and Windows. Override them with `CARGO_FEATURES`; use `cpu-dl` for a CPU-only build
+in the release layout (an empty value builds fully static, which crashes on Linux at the first
+model load: whisper.cpp and ONNX Runtime both instantiate `std::regex`). On Windows the Qwen
+worker builds in a short folder under the temp directory when the checkout path is long
+(CMake's object path limit), or in `VOICEKIT_QWEN_BUILD_DIR`. If `sccache` fails in a sandbox, run with `RUSTC_WRAPPER=`.
 
 ## Plugin dependencies and packaging
 
@@ -90,15 +93,14 @@ afterwards.
 
 ## Releases
 
-v0.1.0 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0).
-0.1.1 (Qwen3-TTS speed and stable GGUF sampling) is being prepared and isn't tagged or
-published; `plugin/shared/release.ts` still pins 0.1.0. Its source passed the real-model CPU
-checks on all five platforms, in separate manual CI runs rather than one all-green run:
-darwin-arm64, linux-arm64 and linux-x64 at `6ef5128`, and win32-x64 and darwin-x64 at
-`55d84e2`, which differs only in a test fixture. The tagged release still has to pass its own
-gates, and its public checksums must be verified, before `release.ts` changes. Method and
-results are in [eval.md](eval.md#real-model-cpu-checks-for-011-2026-11-14). GPU inference on
-Windows, Linux and Intel Macs stays unverified.
+v0.1.1 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.1)
+and pinned in `plugin/shared/release.ts`. Its tag passed CI on all five platforms, the
+published archives match `SHA256SUMS`, and the darwin-arm64 archive was unpacked and checked
+(`voicekit 0.1.1`, both workers built for macOS 14). Platform results, including GPU checks
+on Windows and on Linux through WSL, are in the spec's release checklist
+([spec.md](spec.md)) and in [eval.md](eval.md). Intel Macs, native Linux GPU drivers and
+AMD/Intel GPUs remain unchecked.
+
 `plugin/shared/release.ts` pins each platform's archive URL and SHA-256; a local build
 (`dev-install.sh`) or the Binary path setting takes precedence over it.
 
@@ -135,15 +137,20 @@ To publish, push a `v*` tag. CI builds every platform's asset and publishes them
 `SHA256SUMS`. Then pin them for the plugin:
 
 ```bash
-node scripts/release-manifest.mjs v0.1.0
+node scripts/release-manifest.mjs v0.1.1
 ```
 
 ## Packaging a local build
 
-Releases are published from `swordfeng/paseo-voice-kit`. CI uses supported macOS 15 ARM
-and Intel runners, asserts the architecture, and builds the Linux/Windows variants. Every
+Releases are published from `swordfeng/paseo-voice-kit`. CI uses macOS 26 ARM runners
+(the MLX helper needs Swift 6.3) and macOS 15 Intel runners, asserts the architecture, and
+builds the Linux/Windows variants. Every macOS binary targets macOS 14 or earlier
+(`build-qwen-worker.py` checks the Qwen worker's), so a newer runner doesn't raise the minimum. Every
 platform ships a `.tar.gz` archive with its executable and license notices; Linux and
-Windows also include the ggml backend libraries.
+Windows also include the ggml backend libraries. Apple Silicon archives also include
+the native Swift MLX helper, its Metal resources, compatibility libraries and notices.
+Build it with `python3 scripts/build-mlx-worker.py --target-dir server/target/release`;
+no Python environment is required on the end-user machine.
 
 Before packaging a local build, collect the notices from its Cargo metadata:
 
@@ -158,7 +165,7 @@ Rust dependency inventory, upstream native notices and unmodified MPL-covered
 crate sources. `scripts/release-manifest.mjs` pins the published assets after a
 successful release.
 
-The first managed runtime download requires an affirmative installation choice.
+The first managed speech-server download requires an affirmative installation choice.
 Already-installed, custom and local development binaries need no additional
 confirmation. Declining retains Paseo's fallback and installs no runtime.
 Model weights remain separate downloads controlled by the model-download setting.

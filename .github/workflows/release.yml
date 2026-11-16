@@ -168,6 +168,17 @@ jobs:
           flags=()
           if [[ "${{ runner.os }}" != "macOS" ]]; then flags+=(--vulkan); fi
           python3 scripts/build-qwen-worker.py --target-dir server/target/release "${flags[@]}"
+      - name: Select Swift build tools
+        if: matrix.key == 'darwin-arm64'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build bundled native MLX worker
+        if: matrix.key == 'darwin-arm64'
+        shell: bash
+        run: |
+          xcodebuild -downloadComponent MetalToolchain
+          python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 900
       - name: Package
         shell: bash
         run: |

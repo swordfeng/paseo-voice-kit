@@ -40,6 +40,10 @@ default = []
 # The executable never links the Vulkan loader, so it starts without one. See
 # vendor/whisper-rs-sys.
 vulkan-dl = ["whisper-rs-sys/backend-dl", "whisper-rs-sys/vulkan"]
+# CPU-only Linux / Windows builds in the same layout (runtime-loaded CPU modules, no Vulkan). A
+# fully static Linux build (no features) crashes on the first model load: whisper.cpp's and
+# ONNX Runtime's std::regex instantiations collide when linked into one executable.
+cpu-dl = ["whisper-rs-sys/backend-dl"]
 # Statically linked GPU backends (the binary then needs the Vulkan loader / CUDA runtime to start).
 vulkan = ["whisper-rs/vulkan"]
 cuda = ["whisper-rs/cuda"]

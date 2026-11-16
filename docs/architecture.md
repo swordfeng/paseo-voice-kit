@@ -67,12 +67,15 @@ check). The plugin keeps that choice fixed and reports it as `defaultSttModel`. 
 voice mode use it until the user picks a model, which then stays as chosen. A request's OpenAI `model` field picks among the models a server is
 serving, so dictation and voice mode can use different models.
 
-Whisper first runs a small Silero VAD model on the uploaded audio. It rejects clips
+All local whole-utterance recognizers (Whisper and every Sherpa ASR family, including
+custom models) use a shared Silero VAD preprocessing layer on the uploaded audio. It rejects clips
 without detected speech and removes leading and trailing idle audio, retaining
 300 ms at both edges and all pauses between speech segments. This prevents long
 microphone waiting periods from reaching language detection and decoding. The VAD
-model reuses Paseo's local copy or downloads with Whisper; it unloads with the
-Whisper engine. Audio is not saved unless the server's debug capture flag is used.
+model reuses Paseo's local copy or downloads as a dependency; it loads on the first
+request and unloads with its recognizer. Remote services keep their original input.
+Audio is not saved
+unless the server's debug capture flag is used.
 
 Whisper base then detects the spoken language, and the large model's
 own detection is used when confidence is below 0.7. The Vocabulary setting is passed to
@@ -104,33 +107,73 @@ plugin hands it to the server, which builds a chain (`voicekit-tts-chain`, engin
   models have their 10 languages fixed. Custom GGUF Qwen3-TTS models use a talker and a codec
   file (`ggufModelFile`, `ggufCodecFile`); a Hugging Face lookup downloads only that pair.
 
-Custom MLX Qwen3-TTS models run in a separate MLX Python worker that Voice Kit starts on first use and talks to over stdin and stdout, with no
-listening port. The Python comes from
-`VOICEKIT_MLX_PYTHON`, then `<plugin-data>/runtime/qwen/bin/python` (installed by
-`scripts/install-qwen-runtime.sh`, shipped in native releases as
-`qwen-runtime/install-qwen-runtime.sh`; it needs Apple Silicon, macOS 14 or later and
-Python 3.12, and installs `qwen-build-requirements.txt` and then `qwen-requirements.txt`,
-both locked with SHA-256 hashes). The settings page can run the same installation after
-the user confirms (`voicekit.mlx.status` and `voicekit.mlx.install`); it needs an existing
-Python 3.12, installs only Python packages, and is never started by adding a model or by a
-speech request. Voice Kit never deletes model files it reads from
-outside its own and Paseo's shared model folders. MLX Qwen3-TTS models are added as custom
-models from Hugging Face or a local folder (engine `mlx`, family `qwen3_tts`). Only
-CustomVoice models with the 9 preset voices are supported; Base and VoiceDesign models aren't.
+Custom MLX Qwen3-TTS models run in a separate native Swift worker, launched on first
+use over framed stdin/stdout with no listening port. The Apple Silicon native
+package includes `mlx-runtime/voicekit-mlx-worker`, its Metal library, any Swift
+compatibility dylibs, resource bundles and dependency notices. No Python environment
+or installer is involved. `VOICEKIT_MLX_WORKER` may select another complete native
+bundle for development. The worker requires Apple Silicon and macOS 14 or later.
+`voicekit.mlx.status` only checks bundled files; it never starts a process or loads
+a model. The pinned library is patched to construct tokenizers in memory and never
+write or remove model folders. MLX models are added from Hugging Face or a local
+folder (engine `mlx`, family `qwen3_tts`). Only CustomVoice checkpoints with the
+9 preset voices are supported; Base and VoiceDesign models aren't.
+The speech server sends both Qwen workers the same temperature (0.4) and seed (42)
+through private IPC, from one shared policy in `engine/qwen.rs`. Both main and
+acoustic talkers use that temperature. Each chunk also gets a frame cap from its token
+count (0.8 s per token plus 4 s, at most 1200 frames). A generation that reaches it fails
+with `token_limit` and is retried once with seed 7 at the same temperature (eval.md has
+the measurements). Errors a worker reports for one request leave it running; a crash, a
+failed start or a timeout drops it, and only two in a row start a cooldown. Process reuse,
+bounded requests, worker failure cooldown and idle unloading are owned by Rust. The MLX model weights
+and existing model selections are unchanged by the backend migration.
+Both workers default to the same auditioned Chinese instruction for calm, natural,
+steady delivery without laughter or added vocalizations. The optional
+`VOICEKIT_QWEN_INSTRUCTION` server environment variable overrides it (at most 2048
+UTF-8 bytes); an empty value disables instructions for comparisons.
+GGUF uses `params.instruct`, while MLXAudio CustomVoice uses its
+`speaker, instruction` prompt format. The instruction is separate from spoken text.
+Use with 0.6B is experimental: the official Python wrapper disables its instruction
+field even though the model card advertises it.
 Requests never install packages. Qwen3-TTS has no speed control upstream, so the speech
 server built from the current source changes the tempo of its generated audio afterwards,
 keeping the pitch (native processing built into the server, with nothing extra to install); a
 speed of 1 leaves the audio as generated. This doesn't shorten synthesis. Other models apply
-the speed natively. The GGUF worker samples the main talker with temperature 0.7 and a fixed
-seed, so the same text and voice come out the same each time. Both are in the source for 0.1.1;
+the speed natively. Each worker resets its random seed per generation, so repeated
+text and voice are reproducible within that backend; different backends need not
+produce identical audio. Both backends generate one sentence at a time, budgeting
+at most 64 text tokens with their loaded model's tokenizer through private IPC.
+Oversized sentences split at clause/word boundaries when possible; every candidate
+is re-counted before use. The shared planner preserves Unicode and all source text,
+then concatenates PCM. An 8 KB probe limit bounds private JSON messages independently
+of the text-token budget. Text-token counts do not bound speech duration, so the
+existing 1200 speech token/96-second generation limits and ten-minute assembled
+output cap remain. These changes are in the source for 0.1.1;
 the published 0.1.0 server reads Qwen3-TTS at normal speed with upstream sampling.
 
-Personas (`options.personas` of the chain) pair similar voices across the enabled models.
-Supertonic's voices were chosen by speaker-embedding similarity (3D-Speaker CAM++,
-`server/examples/voice_embed.rs`) and pitch, over samples from `scripts/voice-samples.sh`.
-Each persona's Qwen3-TTS voice was chosen by gender and voice description, not measured.
-Qwen3-TTS's two dialect voices (Beijing, Sichuan) are not used by any persona. The voice
-`custom` uses the voice chosen for each model (`modelVoices`).
+Language routing and Qwen token budgeting share `sentences.rs` for boundaries.
+It handles Latin/CJK punctuation, Arabic/Urdu sentence marks, Indic danda,
+ellipsis, Unicode line/paragraph separators, punctuation runs and closing quotes.
+Decimal/version numbers, common abbreviations/initials, and URLs/email addresses
+are protected by conservative heuristics. Oversized Qwen clauses also recognize
+Arabic commas. This is not a full linguistic parser: ambiguous abbreviations may
+stay joined, and the model-token budget still bounds long fragments. Same-language
+routing runs still merge; this does not change Paseo's playback segmentation.
+
+The common speech API shortens excessive outer silence after the complete reply
+has been assembled and tempo applied, before WAV/PCM encoding. It applies to all
+local and remote TTS engines. Edges longer than 750 ms retain a 250 ms guard;
+shorter natural edges and internal pauses are untouched. Activity uses sustained
+10 ms RMS windows with a relative threshold for quiet voices, capped at 32 PCM16
+units. Silent or uncertain clips are left unchanged; it does not load another model.
+
+Each enabled model reads with its own voice (`modelVoices` in the plugin settings, sent as the
+chain's `options.model_voices`); the voice in a request, and the one Paseo stores, are ignored.
+There are no personas across models. The defaults are Supertonic F1 and Qwen3-TTS serena:
+serena's closest Supertonic voice by speaker-embedding similarity (3D-Speaker CAM++,
+`server/examples/voice_embed.rs`) and pitch (see eval.md). A speech request may name one model
+of the list (`voicekit_route`) to preview it with a given voice, and every chain response
+reports which model, voice and language read each part (`x-voicekit-runs`).
 
 ## UI language
 
@@ -160,8 +203,9 @@ model loads it again.
 - Every endpoint except `/health` (which only reports up or down) needs a bearer token,
   compared in constant time. The plugin creates a new token each time it starts the server
   and passes it in the environment, not on the command line.
-- Paseo's `config.json` and the plugin's state and custom-model files are written
-  owner-only (`0600`). Anything running as your user can read them; a local server can't
+- Paseo's `config.json` and the plugin's state, custom-model and remote-key
+  (`model-keys.json`) files are written owner-only (`0600`). Remote API keys are kept only in
+  `model-keys.json`; plugin settings, which Paseo apps can read, record only `hasApiKey`. Anything running as your user can read them; a local server can't
   protect against that.
 - Downloads use HTTPS with pinned SHA-256 for every built-in model and for release
   binaries.

@@ -69,10 +69,12 @@ class Server:
             args.append("--auto-pull")
         for folder in self.config.reuse_dir:
             args += ["--reuse-dir", str(folder)]
+        for catalog in getattr(self.config, "catalogs", []):
+            args += ["--catalog", str(catalog)]
         self.log = open(self.config.output / (self.phase + ".log"), "w", encoding="utf-8")
         try:
             self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                            stderr=self.log, start_new_session=os.name != "nt",
+                                            stderr=self.log, env=getattr(self.config, "env", None), start_new_session=os.name != "nt",
                                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
             first = queue.Queue()
             threading.Thread(target=lambda: first.put(self.process.stdout.readline()), daemon=True).start()
@@ -186,38 +188,77 @@ def run(config):
     with Server(config, "qwen-tts", "", QWEN) as server:
         chinese = server.speak(CHINESE, "serena", "zh")
         (config.output / "chinese.wav").write_bytes(chinese)
+        repeat = server.speak(CHINESE, "serena", "zh")
+        (config.output / "chinese-repeat.wav").write_bytes(repeat)
+        if repeat != chinese:
+            raise RuntimeError("Qwen fixed-seed speech was not reproducible")
+        qwen_english = server.speak(ENGLISH, "serena", "en")
+        (config.output / "qwen-english.wav").write_bytes(qwen_english)
+        wav_info(qwen_english)
         fast = server.speak(CHINESE, "serena", "zh", 1.25)
         (config.output / "chinese-fast.wav").write_bytes(fast)
         normal, changed = wav_info(chinese), wav_info(fast)
         if abs(changed["seconds"] - normal["seconds"] / 1.25) > 0.08:
             raise RuntimeError("Qwen tempo did not match the requested speed")
-        results.append({"model": QWEN, "device": server.device(QWEN), **normal, "fasterSeconds": changed["seconds"]})
+        results.append({"model": QWEN, "device": server.device(QWEN), **normal, "fasterSeconds": changed["seconds"], "fixedSeedIdentical": True})
     checkpoint()
     with Server(config, "qwen-asr", ASR, SUPER) as server:
         en = server.transcribe(english, "en")
         zh = server.transcribe(chinese, "zh")
+        qwen_en = server.transcribe(qwen_english, "en")
         (config.output / "qwen-asr.json").write_text(json.dumps({"english": en, "chinese": zh}, ensure_ascii=False) + "\n", encoding="utf-8")
-        if any(marker in text for text in (en, zh) for marker in ("<asr_text>", "<|im_end|>", "<|endoftext|>")):
+        if any(marker in text for text in (en, zh, qwen_en) for marker in ("<asr_text>", "<|im_end|>", "<|endoftext|>")):
             raise RuntimeError("Qwen3-ASR returned unprocessed control tokens: " + repr((en, zh)))
         if "test" not in en.lower() or not any(word in zh for word in ("你好", "语音", "测试")):
             raise RuntimeError("Qwen3-ASR round trip failed: " + repr((en, zh)))
-        results.append({"model": ASR, "device": server.device(ASR), "english": en, "chinese": zh})
+        if "test" not in qwen_en.lower() or "speech" not in qwen_en.lower():
+            raise RuntimeError("Qwen English synthesis round trip failed: " + qwen_en)
+        # Reproduce idle microphone accumulation without recording a microphone.
+        with wave.open(io.BytesIO(chinese), "rb") as clip:
+            rate = clip.getframerate()
+            pcm = clip.readframes(clip.getnframes())
+        idle_checks = []
+        for leading in (40, 100):
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as padded:
+                padded.setnchannels(1)
+                padded.setsampwidth(2)
+                padded.setframerate(rate)
+                padded.writeframes(bytes(leading * rate * 2) + pcm)
+            audio = buf.getvalue()
+            (config.output / f"chinese-idle-{leading}.wav").write_bytes(audio)
+            text = server.transcribe(audio, "zh")
+            if not any(word in text for word in ("你好", "语音", "测试")) or any(marker in text for marker in ("<asr_text>", "<|")):
+                raise RuntimeError(f"Qwen3-ASR lost speech after {leading}s idle audio: {text!r}")
+            idle_checks.append({"leadingSilenceSeconds": leading, "text": text})
+        results.append({"model": ASR, "device": server.device(ASR), "english": en, "chinese": zh, "idleAudio": idle_checks})
     checkpoint()
     # Expand only after the small/default models work. Limit this to runners with enough RAM.
     if config.large_qwen:
         with Server(config, "qwen-tts-large", "", LARGE_QWEN) as server:
             large = server.speak(CHINESE, "serena", "zh")
             (config.output / "chinese-large.wav").write_bytes(large)
+            repeat = server.speak(CHINESE, "serena", "zh")
+            (config.output / "chinese-large-repeat.wav").write_bytes(repeat)
+            if repeat != large:
+                raise RuntimeError("Large Qwen fixed-seed speech was not reproducible")
+            large_english = server.speak(ENGLISH, "serena", "en")
+            (config.output / "large-english.wav").write_bytes(large_english)
+            wav_info(large_english)
             fast = server.speak(CHINESE, "serena", "zh", 1.25)
             normal, changed = wav_info(large), wav_info(fast)
             if abs(changed["seconds"] - normal["seconds"] / 1.25) > 0.08:
                 raise RuntimeError("Large Qwen tempo did not match the requested speed")
-            results.append({"model": LARGE_QWEN, "device": server.device(LARGE_QWEN), **normal, "fasterSeconds": changed["seconds"]})
+            results.append({"model": LARGE_QWEN, "device": server.device(LARGE_QWEN), **normal, "fasterSeconds": changed["seconds"], "fixedSeedIdentical": True})
         with Server(config, "qwen-asr-large-roundtrip", ASR, SUPER) as server:
             text = server.transcribe(large, "zh")
             if not any(word in text for word in ("你好", "语音", "测试")):
                 raise RuntimeError("Large Qwen round trip failed: " + text)
             results[-1]["text"] = text
+            en = server.transcribe(large_english, "en")
+            if "test" not in en.lower() or "speech" not in en.lower():
+                raise RuntimeError("Large Qwen English round trip failed: " + en)
+            results[-1]["english"] = en
         checkpoint()
     report = {"platform": sys.platform, "acceleratorMode": config.accelerator, "seconds": round(time.monotonic() - started, 2), "models": results}
     (config.output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

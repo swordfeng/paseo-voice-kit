@@ -118,8 +118,15 @@ export type TtsError = z.infer<typeof TtsErrorSchema>;
 
 /** Server notices as language-neutral data; `message` keeps the English text. */
 export const NoticeSchema = z.object({
-  code: z.enum(["portBusy", "checkingGpu", "crashRestarting", "crashGaveUp", "healthCheckFailed", "runtimeDownloadRequired"]),
+  code: z.enum(["portBusy", "checkingGpu", "crashRestarting", "crashGaveUp", "healthCheckFailed", "runtimeDownloadRequired", "serverVersionMismatch"]),
   url: z.string().optional(),
+  /** runtimeDownloadRequired: the archive to approve (its SHA-256) and its version. */
+  sha256: z.string().optional(),
+  /** runtimeDownloadRequired: the archive's version; serverVersionMismatch: the version found. */
+  version: z.string().optional(),
+  /** serverVersionMismatch: the version this plugin needs, and where the other server came from. */
+  required: z.string().optional(),
+  source: z.enum(["setting", "local", "release"]).optional(),
   port: z.number().optional(),
   /** Exit code and signal of a crashed server, as reported by the OS. */
   exit: z.string().optional(),
@@ -159,6 +166,11 @@ export const StatusSchema = z.object({
    * (not all of Paseo). Null where it can't be measured.
    */
   memoryBytes: z.number().nullable(),
+  /** Dedicated GPU bytes attributed to Voice Kit's processes; null when unavailable. */
+  gpuMemoryBytes: z.number().nullable().default(null),
+  /** GPU shared system memory, reported separately from dedicated GPU memory. */
+  gpuSharedMemoryBytes: z.number().nullable().default(null),
+  gpuMemorySource: z.literal("windows-process-counters").nullable().default(null),
 });
 export type Status = z.infer<typeof StatusSchema>;
 
@@ -224,22 +236,17 @@ export type Voice = z.infer<typeof VoiceSchema>;
 const Empty = z.object({});
 const Ok = z.object({ ok: z.boolean() });
 
-/** Optional MLX environment setup, explicitly requested by the user; never downloads weights. */
+/** Bundled native MLX helper availability; checking never starts a model. */
 export const MlxRuntimeSchema = z.object({
-  phase: z.enum(["missing", "installing", "ready", "failed", "unavailable"]),
-  reason: z.enum(["platform", "pythonRequired", "runtimeRequired", "externalRuntime"]).nullable(),
+  phase: z.enum(["ready", "unavailable"]),
+  reason: z.enum(["platform", "runtimeRequired"]).nullable(),
   path: z.string(),
-  python: z.string().nullable(),
+  worker: z.string().nullable(),
   error: z.string().nullable(),
-  lines: z.array(z.string()),
 });
 export type MlxRuntime = z.infer<typeof MlxRuntimeSchema>;
 export const mlxRuntimeRpc = defineRpc({ name: "voicekit.mlx.status", input: Empty, output: MlxRuntimeSchema });
-export const installMlxRuntimeRpc = defineRpc({
-  name: "voicekit.mlx.install",
-  input: z.object({ confirmed: z.literal(true) }),
-  output: MlxRuntimeSchema,
-});
+
 
 /** Called by every client entry on load. Gives the backend its daemon session. */
 export const attachRpc = defineRpc({ name: "voicekit.attach", input: Empty, output: Ok });
@@ -249,6 +256,12 @@ export const modelsRpc = defineRpc({
   name: "voicekit.models",
   input: Empty,
   output: z.object({ models: z.array(ModelSchema), coremlSupported: z.boolean() }),
+});
+/** Save or clear (null) the API key of a custom remote server. Keys can't be read back. */
+export const setModelKeyRpc = defineRpc({
+  name: "voicekit.models.set-key",
+  input: z.object({ id: z.string().regex(/^custom-[a-z0-9-]+$/), apiKey: z.string().max(4096).nullable() }),
+  output: Ok,
 });
 export const pullModelRpc = defineRpc({ name: "voicekit.models.pull", input: z.object({ id: z.string() }), output: Ok });
 export const removeModelRpc = defineRpc({
@@ -282,6 +295,8 @@ export const RouteVoicesSchema = z.object({
   error: z.string().nullable().optional(),
   /** Seconds until a failed model is tried again. */
   retryAfterSeconds: z.number().nullable().optional(),
+  /** Set when this model's GPU worker failed and it now runs on the CPU: that error. */
+  gpuFallback: z.string().nullable().optional(),
 });
 export type RouteVoices = z.infer<typeof RouteVoicesSchema>;
 
@@ -290,10 +305,21 @@ export const voicesRpc = defineRpc({
   input: Empty,
   output: z.object({ voices: z.array(VoiceSchema), routes: z.array(RouteVoicesSchema).default([]) }),
 });
+/** Which model and voice read one part of a reply, and in which language. */
+export const SpokenRunSchema = z.object({
+  model: z.string(),
+  voice: z.string(),
+  language: z.string().nullable().default(null),
+  /** The pronunciation used, when it isn't `language`'s (an allowed approximate reading). */
+  read_as: z.string().nullable().default(null),
+});
+export type SpokenRun = z.infer<typeof SpokenRunSchema>;
+
+/** Speak text: through the whole voice list, or (with `model`) with that one model and `voice`. */
 export const previewRpc = defineRpc({
   name: "voicekit.preview",
-  input: z.object({ voice: z.string().optional(), text: z.string().max(400).optional() }),
-  output: z.object({ base64: z.string(), mimeType: z.string(), ms: z.number() }),
+  input: z.object({ voice: z.string().optional(), text: z.string().max(400).optional(), model: z.string().optional() }),
+  output: z.object({ base64: z.string(), mimeType: z.string(), ms: z.number(), runs: z.array(SpokenRunSchema).default([]) }),
 });
 export const reclaimRpc = defineRpc({
   name: "voicekit.reclaim",

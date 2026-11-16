@@ -10,6 +10,7 @@ mod lang;
 mod probe;
 mod runtime;
 mod speech_filter;
+mod sentences;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -231,6 +232,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir).context("create capture dir")?;
     }
     std::fs::create_dir_all(&args.store.models_dir).context("create models dir")?;
+    // No download runs yet: abandoned partial files can go.
+    download::gc_partials(&args.store.models_dir);
 
     // Load the ggml backends (Vulkan only if its loader and a GPU exist) in the background:
     // initializing a GPU can take seconds (Metal compiles its library), and the handshake below
@@ -265,27 +268,25 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Machine-readable handshake for the supervisor. Always the first stdout line.
     println!("{}", serde_json::json!({ "event": "listening", "port": port, "version": env!("CARGO_PKG_VERSION") }));
 
-    // Prepare models in the background: download if asked, then warm both engines so the
-    // first real request does not pay the load cost.
+    // Download configured models in the background, but leave engines unloaded until a request.
     {
         let runtime = runtime.clone();
         let auto_pull = args.auto_pull;
         tokio::spawn(async move {
             if !runtime.settings.stub && auto_pull {
                 for entry in runtime.missing_models() {
-                    if let Err(err) = runtime.downloads.ensure(&runtime.store, &entry).await {
-                        tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed");
+                    match runtime.downloads.ensure(&runtime.store, &entry).await {
+                        Ok(()) => {
+                            // An early request may have cached a missing-model/dependency failure.
+                            // Recover failed engines now; unused engines remain unloaded.
+                            let rt = runtime.clone();
+                            let _ = tokio::task::spawn_blocking(move || rt.recover_downloaded(&entry.id)).await;
+                        }
+                        Err(err) => tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed"),
                     }
                 }
             }
-            let rt = runtime.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                rt.warm_up();
-                println!("{}", serde_json::json!({ "event": "warm", "status": rt.status()["status"] }));
-            })
-            .await;
-            // Neural Engine encoders last: they are large and optional. Whisper keeps serving
-            // on Metal while one downloads and compiles, then switches over.
+            // Optional encoders may download now; only an already loaded model is reloaded.
             if !runtime.settings.stub && auto_pull {
                 for entry in runtime.missing_coreml() {
                     match runtime.downloads.ensure_coreml(&runtime.store, &entry).await {
@@ -310,6 +311,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 tick.tick().await;
                 let rt = runtime.clone();
                 let _ = tokio::task::spawn_blocking(move || { rt.unload_idle(); rt.retry_failed(); }).await;
+                // Automatic downloads that failed are tried again after a while.
+                if runtime.settings.auto_pull && !runtime.settings.stub {
+                    for entry in runtime.missing_models() {
+                        if !runtime.downloads.failed_and_due(&entry.id) { continue; }
+                        let rt = runtime.clone();
+                        tokio::spawn(async move {
+                            tracing::info!(model = entry.id, "retrying a failed download");
+                            match rt.downloads.ensure(&rt.store, &entry).await {
+                                Ok(()) => { let r = rt.clone(); let _ = tokio::task::spawn_blocking(move || r.recover_downloaded(&entry.id)).await; }
+                                Err(err) => tracing::error!(model = entry.id, error = %format!("{err:#}"), "download failed"),
+                            }
+                        });
+                    }
+                }
             }
         });
     }

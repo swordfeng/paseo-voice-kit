@@ -206,6 +206,14 @@ export class PaseoModels {
     if (this.pending.has(id) || ["downloading", "extracting"].includes(this.state(id)?.status ?? "")) throw new Error("Model download is in progress");
     await this.mark(id);
     await (await this.getClient()).deleteLocalSpeechModel(PASEO_MODELS[id].id);
+    // The user removed the model: an older private copy (kept by adopt() because it differed from
+    // Paseo's) goes too. The server never reads it while Paseo manages the model. Only the model's
+    // own files are removed, as in adopt().
+    const privateCopy = join(this.options.localDir ?? paths.models, PASEO_MODELS[id].dir);
+    if (!(await lstat(privateCopy).then(s => s.isSymbolicLink(), () => true))) {
+      for (const file of PASEO_MODELS[id].files) await unlink(join(privateCopy, file)).catch(() => undefined);
+      await rmdir(privateCopy).catch(() => undefined);
+    }
     this.errors.delete(id); await this.list(true);
   }
   async dispose() {

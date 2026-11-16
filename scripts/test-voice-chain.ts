@@ -2,7 +2,7 @@
 // approximate-reading filter (plugin/shared/settings.ts).
 //   .capture/harness/node_modules/.bin/esbuild scripts/test-voice-chain.ts --bundle --platform=node --format=esm --outfile=/tmp/vk-chain.mjs && node /tmp/vk-chain.mjs
 import type { Model } from "../plugin/shared/rpc";
-import { effectiveApproximateLanguages, preferencesSchema, voiceSpec } from "../plugin/shared/settings";
+import { effectiveApproximateLanguages, modelVoice, preferencesSchema } from "../plugin/shared/settings";
 import { coverage, isVisibleVoiceModel, move, nativeLanguages } from "../plugin/client/voice-chain";
 
 let failed = 0;
@@ -19,12 +19,14 @@ const supertonic = model("supertonic-3", ["en", "es", "id"]);
 const qwen = model("qwen3-tts-0.6b-gguf-q4", ["zh", "en"], { engine: "gguf" });
 const chainEntry = model("voicekit-tts-chain", ["en", "es", "id", "zh"], { engine: "chain", tier: "internal" });
 
-// Defaults: Supertonic 3 alone, no approximate readings, a persona voice.
+// Defaults: Supertonic 3 alone, no approximate readings, a voice chosen per model.
 const defaults = preferencesSchema.parse({});
 expect(eq(defaults.ttsModels, ["supertonic-3"]), "1 default list is Supertonic 3 alone");
 expect(eq(defaults.ttsApproximateLanguages, []), "1 no approximate readings by default");
-expect(voiceSpec(defaults) === "female-higher", "1 default voice is a persona");
-expect(voiceSpec({ voice: "custom" }) === "custom", "1 custom voice stays custom");
+expect(!("voice" in defaults) && !("voice" in preferencesSchema.parse({ voice: "female-higher" })), "1 no persona setting (an old one is dropped)");
+expect(modelVoice(defaults, "supertonic-3") === "F1" && modelVoice(defaults, "qwen3-tts-1.7b-gguf-q8") === "serena", "1 built-in defaults are the measured pair F1 / serena");
+expect(modelVoice(defaults, "custom-mlx-ab12", "qwen3_tts") === "serena" && modelVoice(defaults, "custom-kokoro-ab12", "kokoro") === undefined, "1 custom Qwen models share it; others use their own default");
+expect(modelVoice({ modelVoices: { "supertonic-3": "M2" } }, "supertonic-3") === "M2", "1 a chosen voice wins");
 expect(eq(preferencesSchema.parse({ ttsModels: [] }).ttsModels, []), "1 an empty list is kept");
 
 // Only real voice models can be enabled: not the server's chain entry, not listening models.

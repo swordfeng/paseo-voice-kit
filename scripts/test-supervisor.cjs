@@ -19,7 +19,7 @@ const sdk = {
   execCommand: async (_command, args) => {
     if (args?.includes('--version')) {
       if (gate) await gate;
-      return { stdout: 'voicekit 0.1.0', stderr: '' };
+      return { stdout: 'voicekit ' + (sdk.reportedVersion ?? require(root + '/plugin/shared/release.ts').SERVER_VERSION), stderr: '' };
     }
     return { stdout: '', stderr: '' };
   },
@@ -29,6 +29,11 @@ const sdk = {
     child.pid = spawnMode === 'error' ? undefined : 1000000000 + spawns.length; child.exitCode = null;
     const exit = () => { if (child.exitCode !== null) return; child.exitCode = 0; active--; child.emit('exit', 0, null); child.emit('close', 0, null); };
     child.stdin = { end: () => setImmediate(exit) }; child.kill = () => { setImmediate(exit); return true; };
+    if (spawnMode === 'stubborn') {
+      // Ignores stdin EOF and SIGTERM, like a server stuck in a long request; only SIGKILL ends it.
+      child.stdin = { end: () => {} };
+      child.kill = (signal) => { if (signal === 'SIGKILL') setImmediate(exit); return true; };
+    }
     if (child.pid) active++;
     maximum = Math.max(maximum, active); spawns.push(args); latestChild = child;
     if (spawnMode === 'error') queueMicrotask(() => {
@@ -38,7 +43,7 @@ const sdk = {
     if (spawnMode === 'early-exit') queueMicrotask(exit);
     return child;
   },
-  terminateProcess: async (child) => child.kill(),
+  terminateProcess: async (child, signal) => child.kill(signal ?? 'SIGKILL'),
 };
 function archive(name, bytes) {
   const header = Buffer.alloc(512);
@@ -58,21 +63,33 @@ Module._load = function (name, ...args) {
   return originalLoad.call(this, name, ...args);
 };
 (async () => {
-  const { RELEASE, platformKey } = require(root + '/plugin/shared/release.ts');
-  const { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired } = require(root + '/plugin/server/binary.ts');
+  const { RELEASE, SERVER_VERSION, platformKey } = require(root + '/plugin/shared/release.ts');
+  const { resolveBinary, settleBinaryInstalls, RuntimeDownloadRequired, ServerVersionMismatch } = require(root + '/plugin/server/binary.ts');
+  const cargoVersion = /^version = "([^"]+)"/m.exec(fs.readFileSync(path.join(root, 'server/Cargo.toml'), 'utf8'))[1];
+  assert.equal(SERVER_VERSION, cargoVersion, 'plugin SERVER_VERSION matches server/Cargo.toml');
+  console.log('PASS the plugin names the server version it is built with');
+  const pinnedVersion = RELEASE.version;
+  RELEASE.version = SERVER_VERSION;
   const { paths, EXE } = require(root + '/plugin/server/paths.ts');
-  const bytes = Buffer.from('#!/bin/sh\necho voicekit 0.1.0\n');
+  const bytes = Buffer.from('#!/bin/sh\necho voicekit ' + SERVER_VERSION + '\n');
   const packaged = archive('voicekit-fixture/' + EXE, bytes);
   const url = 'https://example.invalid/voicekit';
-  RELEASE.assets[platformKey(process.platform, process.arch)] = { url, exe: 'voicekit-fixture/' + EXE, sha256: createHash('sha256').update(packaged).digest('hex') };
+  const approved = createHash('sha256').update(packaged).digest('hex');
+  RELEASE.assets[platformKey(process.platform, process.arch)] = { url, exe: 'voicekit-fixture/' + EXE, sha256: approved };
   const oldFetch = global.fetch;
   let requests = 0;
   global.fetch = async (source) => { assert.equal(source, url); requests++; return new Response(packaged); };
   try {
-    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), RuntimeDownloadRequired);
-    assert.equal(requests, 0, 'no request before consent');
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), (e) => e instanceof RuntimeDownloadRequired && e.sha256 === approved && e.version === SERVER_VERSION);
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal, 'f'.repeat(64)), RuntimeDownloadRequired);
+    assert.equal(requests, 0, 'no request before consent, nor with consent for another archive');
+    RELEASE.version = pinnedVersion === SERVER_VERSION ? '0.0.0-other' : pinnedVersion;
+    await assert.rejects(resolveBinary('', () => {}, new AbortController().signal, approved), (e) => e instanceof ServerVersionMismatch && e.source === 'release');
+    assert.equal(requests, 0, 'a pinned release of another version is never downloaded');
+    RELEASE.version = SERVER_VERSION;
+    console.log('PASS approval covers one archive; a release of another version is refused before download');
     const denied = resolveBinary('', () => {}, new AbortController().signal);
-    const accepted = resolveBinary('', () => {}, new AbortController().signal, true);
+    const accepted = resolveBinary('', () => {}, new AbortController().signal, approved);
     await assert.rejects(denied, RuntimeDownloadRequired);
     await accepted;
     assert.equal(requests, 1);
@@ -83,11 +100,11 @@ Module._load = function (name, ...args) {
     let releaseFetch;
     const owner = new AbortController(), oldWait = new AbortController();
     global.fetch = async () => { requests++; await new Promise(r => { releaseFetch = r; }); return new Response(packaged); };
-    const old = resolveBinary('', () => {}, owner.signal, true, oldWait.signal);
+    const old = resolveBinary('', () => {}, owner.signal, approved, oldWait.signal);
     await until(() => !!releaseFetch);
     oldWait.abort(); await assert.rejects(old, { name: 'AbortError' });
     let progress = 0;
-    const latest = resolveBinary('', () => progress++, owner.signal, true, new AbortController().signal);
+    const latest = resolveBinary('', () => progress++, owner.signal, approved, new AbortController().signal);
     releaseFetch(); await latest;
     assert.equal(requests, 2, 'settings cancellation reuses the single in-flight archive');
     assert(progress > 0, 'the new waiter receives install progress');
@@ -96,23 +113,46 @@ Module._load = function (name, ...args) {
     fs.rmSync(path.join(paths.bin, RELEASE.version), { recursive: true });
     const cancelled = new AbortController(); let streamCancelled = false;
     global.fetch = async () => new Response(new ReadableStream({ start(c) { c.enqueue(packaged.subarray(0, 16)); }, cancel() { streamCancelled = true; } }));
-    const unfinished = resolveBinary('', () => {}, cancelled.signal, true);
+    const unfinished = resolveBinary('', () => {}, cancelled.signal, approved);
     await until(() => fs.existsSync(path.join(paths.bin, RELEASE.version + '.tar.gz.part')));
     cancelled.abort(); await assert.rejects(unfinished, { name: 'AbortError' });
     await settleBinaryInstalls(cancelled.signal);
     assert(streamCancelled); assert(!fs.existsSync(path.join(paths.bin, RELEASE.version + '.tar.gz.part')));
     assert(!fs.existsSync(path.join(paths.bin, RELEASE.version + '.staging-' + process.pid)));
     global.fetch = async () => new Response(packaged);
-    await resolveBinary('', () => {}, new AbortController().signal, true);
+    await resolveBinary('', () => {}, new AbortController().signal, approved);
     console.log('PASS owner shutdown cancels transfer, cleans staging and allows a later retry');
   } finally { global.fetch = oldFetch; }
   fs.mkdirSync(path.join(paths.bin, 'local'), { recursive: true });
   fs.writeFileSync(path.join(paths.bin, 'local', EXE), bytes, { mode: 0o755 });
-  const { Supervisor } = require(root + '/plugin/server/supervisor.ts');
+  sdk.reportedVersion = '0.0.9';
+  await assert.rejects(resolveBinary('', () => {}, new AbortController().signal), (e) => e instanceof ServerVersionMismatch && e.source === 'local' && e.found === '0.0.9');
+  sdk.reportedVersion = undefined;
+  assert.equal((await resolveBinary('', () => {}, new AbortController().signal)).version, SERVER_VERSION);
+  console.log('PASS a local build of another version is refused');
+  const { Supervisor, ourServerPids } = require(root + '/plugin/server/supervisor.ts');
+  {
+    const unix = [
+      '  101 /Users/a/.paseo/plugin-data/voice-kit/bin/local/voicekit serve --port 47615 --models-dir /Users/a/.paseo/plugin-data/voice-kit/models --reuse-dir /x',
+      '  102 /tmp/other/voicekit serve --port 0 --models-dir /Users/a/other-models',
+      '  103 /usr/bin/vim voicekit serve --models-dir /Users/a/.paseo/plugin-data/voice-kit/modelsx',
+      '  104 node voicekit-tests.mjs --models-dir /Users/a/.paseo/plugin-data/voice-kit/models',
+    ].join('\n');
+    assert.deepEqual(ourServerPids(unix, '/Users/a/.paseo/plugin-data/voice-kit/models'), [101]);
+    const windows = [
+      '4120 "C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\bin\\local\\voicekit.exe" serve --port 47615 --models-dir C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models --exit-on-stdin-eof',
+      '4121 C:\\VK\\voicekit.exe serve --port 0 --models-dir "C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models"',
+      '4122 C:\\VK\\voicekit.exe probe --models-dir C:\\Users\\A\\.paseo\\plugin-data\\voice-kit\\models',
+      '4123 C:\\VK\\voicekit.exe serve --models-dir D:\\elsewhere',
+      '',
+    ].join('\r\n');
+    assert.deepEqual(ourServerPids(windows, 'c:\\users\\a\\.paseo\\plugin-data\\voice-kit\\models', true), [4120, 4121]);
+    console.log('PASS leftover servers are found on Unix and Windows, and only for this models folder');
+  }
   const supervisor = new Supervisor(() => {});
   const config = { binaryPath: '', port: 0, sttModels: ['test'], ttsModel: 'test', voice: 'A', speed: 1,
     language: 'auto', voiceLanguages: [], vocabulary: '', accelerator: 'cpu', autoDownload: false,
-    runtimeDownloadApproved: false, idleUnloadMinutes: 10, neuralEngine: false, catalogPath: '/unused', catalogHash: '1' };
+    approvedServerArchive: '', idleUnloadMinutes: 10, neuralEngine: false, catalogPath: '/unused', catalogHash: '1' };
   let release;
   gate = new Promise(resolve => { release = resolve; });
   const first = supervisor.apply(config);
@@ -166,6 +206,58 @@ Module._load = function (name, ...args) {
   assert.equal(active, 0); assert.equal(postSpawnError.state.phase, 'restarting');
   assert.equal(postSpawnError.crashes.length, 1); await postSpawnError.dispose();
   console.log('PASS spawn error/close/exit once, bounded retries, immediate exit and no live predecessor');
+
+  // SUP-3: restarts back off (1 s, then 2 s) before giving up.
+  spawnMode = 'early-exit';
+  const backoff = new Supervisor(() => {});
+  await backoff.apply(config); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(backoff.state.notice.code, 'crashRestarting'); assert.equal(backoff.state.notice.seconds, 1);
+  clearTimeout(backoff.restartTimer); backoff.restartTimer = null;
+  await backoff.start(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(backoff.state.notice.seconds, 2, 'the second crash waits longer');
+  await backoff.dispose();
+  spawnMode = 'normal';
+  console.log('PASS crash restarts back off');
+
+  // SUP-1: a busy port falls back to a free one and says so.
+  const net = require('node:net');
+  const blocker = net.createServer(); await new Promise(resolve => blocker.listen(0, '127.0.0.1', resolve));
+  const busyPort = blocker.address().port;
+  const busy = new Supervisor(() => {});
+  await busy.apply({ ...config, port: busyPort });
+  const args = spawns.at(-1);
+  assert.equal(args[args.indexOf('--port') + 1], '0', 'the server picks a free port');
+  assert.equal(busy.state.notice?.code, 'portBusy'); assert.equal(busy.state.notice?.port, busyPort);
+  await busy.dispose(); await new Promise(resolve => blocker.close(resolve));
+  console.log('PASS a busy port falls back to a free one with a notice');
+
+  // SUP-4: one missed health check is not an outage; two in a row are.
+  const healthy = new Supervisor(() => {});
+  const realFetch = global.fetch;
+  try {
+    await healthy.apply(config);
+    healthy.snapshot.port = 49102;
+    global.fetch = async () => { throw new Error('connection refused'); };
+    await healthy.checkHealth();
+    assert.notEqual(healthy.state.phase, 'degraded', 'one miss is tolerated');
+    await healthy.checkHealth();
+    assert.equal(healthy.state.phase, 'degraded'); assert.equal(healthy.state.notice?.code, 'healthCheckFailed');
+  } finally { global.fetch = realFetch; await healthy.dispose(); }
+  console.log('PASS two missed health checks mark the server degraded');
+
+  // SUP-5: a restart waits only so long for a server that doesn't exit, then ends it.
+  spawnMode = 'stubborn';
+  const draining = new Supervisor(() => {});
+  draining.drainMs = 80;
+  await draining.apply(config);
+  const stuck = latestChild, began = Date.now();
+  spawnMode = 'normal';
+  await draining.apply({ ...config, voice: 'NEXT' });
+  assert(stuck.exitCode !== null, 'the old server was ended');
+  assert(Date.now() - began >= 80 && Date.now() - began < 3000, 'after the drain limit, not before');
+  assert.equal(spawns.at(-1)[spawns.at(-1).indexOf('--voice') + 1], 'NEXT');
+  await draining.dispose();
+  console.log('PASS a restart ends a server that outlives the drain limit');
 
   const checked = new Supervisor(() => {});
   const savedFetch = global.fetch;

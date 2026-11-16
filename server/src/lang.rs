@@ -137,21 +137,8 @@ pub struct Run {
 /// Split text into sentences, detect each sentence's language, let undetectable sentences
 /// take their neighbour's language, and merge consecutive sentences of the same language.
 pub fn runs(text: &str) -> Vec<Run> {
-    let mut sentences: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for c in text.chars() {
-        current.push(c);
-        if matches!(c, '.' | '!' | '?' | ';' | '。' | '！' | '？' | '；' | '\n') {
-            if !current.trim().is_empty() {
-                sentences.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
-        }
-    }
-    if !current.trim().is_empty() {
-        sentences.push(current);
-    }
+    let sentences: Vec<String> = crate::sentences::split(text).into_iter()
+        .filter(|s| !s.trim().is_empty()).map(str::to_owned).collect();
 
     let mut langs: Vec<Option<&'static str>> = sentences.iter().map(|s| detect(s)).collect();
     // Unknown sentences inherit from the previous known one, else the next.
@@ -221,3 +208,16 @@ mod tests {
     fn short_arabic_greeting_keeps_its_language() {
         assert_eq!(detect("مرحبا كيف حالك اليوم"), Some("ar"));
     }
+
+#[cfg(test)]
+mod sentence_routing_tests {
+    #[test]
+    fn shared_boundaries_keep_adjacent_arabic_and_indic_runs_separate() {
+        for (text, expected) in [
+            ("مرحبا كيف حالك اليوم؟你好，今天天气很好。", vec![Some("ar"), Some("zh")]),
+            ("आज मौसम बहुत अच्छा है और हम पार्क जा रहे हैं।The build passed and all tests are green.", vec![Some("hi"), Some("en")]),
+        ] {
+            assert_eq!(super::runs(text).iter().map(|r| r.lang).collect::<Vec<_>>(), expected);
+        }
+    }
+}
