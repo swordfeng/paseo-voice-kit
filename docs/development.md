@@ -143,8 +143,10 @@ node scripts/release-manifest.mjs v0.1.0
 
 ## Packaging a local build
 
-Releases are published from `swordfeng/paseo-voice-kit`. CI uses supported macOS 15 ARM
-and Intel runners, asserts the architecture, and builds the Linux/Windows variants. Every
+Releases are published from `swordfeng/paseo-voice-kit`. CI uses macOS 26 ARM runners
+(the MLX helper needs Swift 6.3) and macOS 15 Intel runners, asserts the architecture, and
+builds the Linux/Windows variants. Every macOS binary targets macOS 14 or earlier
+(`build-qwen-worker.py` checks the Qwen worker's), so a newer runner doesn't raise the minimum. Every
 platform ships a `.tar.gz` archive with its executable and license notices; Linux and
 Windows also include the ggml backend libraries. Apple Silicon archives also include
 the native Swift MLX helper, its Metal resources, compatibility libraries and notices.

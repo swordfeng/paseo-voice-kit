@@ -65,6 +65,10 @@ if os.environ.get('VOICEKIT_QWEN_BUILD_DIR'):build=pathlib.Path(os.environ['VOIC
 elif platform.system()=='Windows' and len(str(build))>60:build=pathlib.Path(tempfile.gettempdir())/('vkqw-'+hashlib.sha256(str(root).encode()).hexdigest()[:8])
 cmd=['cmake','-S',str(root/'server/qwen-worker'),'-B',str(build),'-DQWEN_SOURCE_DIR='+str(sources/'qwentts'),'-DGGML_SOURCE_DIR='+str(sources/'ggml'),'-DCMAKE_BUILD_TYPE=Release','-DGGML_NATIVE=OFF','-DGGML_METAL='+('ON' if darwin else 'OFF'),'-DGGML_METAL_EMBED_LIBRARY=OFF','-DBUILD_SHARED_LIBS=ON','-DGGML_VULKAN='+('ON' if args.vulkan else 'OFF')]
 if not darwin:cmd+=['-DGGML_BACKEND_DL=ON','-DGGML_CPU_ALL_VARIANTS=ON']
+# Without a deployment target the worker requires the build machine's macOS version.
+# Voice Kit supports macOS 14 and later (the MLX helper's minimum too).
+MACOS_MIN='14.0'
+if darwin:cmd+=['-DCMAKE_OSX_DEPLOYMENT_TARGET='+MACOS_MIN]
 if platform.system()=='Windows':cmd+=['-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DGGML_OPENMP=OFF']
 subprocess.run(cmd,check=True)
 subprocess.run(['cmake','--build',str(build),'--config','Release','--target','voicekit-qwen-worker','-j',os.environ.get('CMAKE_BUILD_PARALLEL_LEVEL','8')],check=True)
@@ -91,6 +95,12 @@ for source in build.rglob('*'):
  if source.parent.name=='kernels' and source.suffix in {'.metal','.h'}:
   (dest/'kernels').mkdir(exist_ok=True);shutil.copy2(source,dest/'kernels'/name)
 if not any((dest/n).exists() for n in names[:2]):raise RuntimeError('Qwen worker executable missing')
+if darwin:
+ for built in [dest/'voicekit-qwen-worker',*sorted(dest.glob('libggml*.dylib'))]:
+  load=subprocess.check_output(['otool','-l',str(built)],text=True)
+  found=re.search(r'LC_BUILD_VERSION.*?minos (\S+)',load,re.S)
+  if not found or tuple(map(int,found[1].split('.')))>tuple(map(int,MACOS_MIN.split('.'))):
+   raise RuntimeError(built.name+' requires macOS '+(found[1] if found else '?')+', above '+MACOS_MIN)
 for stale in dest.iterdir():
  if stale.is_file() and stale.name.startswith('libggml') and stale.name not in copied:stale.unlink()
 notice=dest/'notices';notice.mkdir(exist_ok=True)

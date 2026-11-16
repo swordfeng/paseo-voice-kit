@@ -1,5 +1,5 @@
 [
-  { "os": "macos-15", "key": "darwin-arm64", "features": "coreml" },
+  { "os": "macos-26", "key": "darwin-arm64", "features": "coreml" },
   { "os": "macos-15-intel", "key": "darwin-x64", "features": "coreml" },
   { "os": "ubuntu-22.04", "key": "linux-x64", "features": "vulkan-dl" },
   { "os": "ubuntu-22.04-arm", "key": "linux-arm64", "features": "vulkan-dl" },
