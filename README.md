@@ -96,7 +96,8 @@ this, is being prepared.
 
 On Linux and Windows, `dev-install.sh` builds with Vulkan support by default, which
 needs Vulkan headers and `glslc`. For a CPU-only build, use
-`CARGO_FEATURES= scripts/dev-install.sh`. Details are in
+`CARGO_FEATURES=cpu-dl scripts/dev-install.sh` (a build with no features at all crashes on
+Linux when it loads a model). Details are in
 [docs/development.md](docs/development.md).
 
 ## Platforms and testing

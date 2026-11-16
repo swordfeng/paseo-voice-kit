@@ -3,7 +3,7 @@ import { MlxRuntimeMonitor } from "../plugin/server/mlx-runtime";
 const files = new Set(["voicekit-mlx-worker", "mlx.metallib", "libswiftCompatibilitySpan.dylib"]);
 let checks = 0;
 const options = { binary: () => "/bundle/voicekit", supported: () => true,
-  exists: async (path: string) => { checks++; return files.has(path.split("/").pop()!); },
+  exists: async (path: string) => { checks++; return files.has(path.split(/[\\/]/).pop()!); },
   manifest: async () => ({ backend: "swift-mlx", protocol: 1, files: [...files] }),
 };
 const monitor = new MlxRuntimeMonitor(options);

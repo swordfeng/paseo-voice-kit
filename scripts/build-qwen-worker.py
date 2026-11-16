@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build the pinned, offline Qwen worker beside voicekit, isolated from Whisper's GGML."""
-import argparse, hashlib, json, os, pathlib, platform, re, shutil, subprocess, tarfile
+import argparse, hashlib, json, os, pathlib, platform, re, shutil, subprocess, tarfile, tempfile
 p=argparse.ArgumentParser();p.add_argument('--target-dir',required=True);p.add_argument('--vulkan',action='store_true');args=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1];dest=pathlib.Path(args.target_dir).resolve()/'gguf-runtime'
 work=root/'server'/'target'/'qwen-worker';sources=work/'sources';sources.mkdir(parents=True,exist_ok=True)
@@ -28,6 +28,10 @@ source=sources/'qwentts/src/qwen.cpp'
 include='\n#include "voicekit-token-count.inc"\n'
 if include not in source.read_text():source.write_text(source.read_text()+include)
 build=work/'build';darwin=platform.system()=='Darwin'
+# Windows: CMake's try-compile object paths under a deep checkout exceed the 250-character limit
+# (CMAKE_OBJECT_PATH_MAX), so build in a short per-checkout folder instead (or VOICEKIT_QWEN_BUILD_DIR).
+if os.environ.get('VOICEKIT_QWEN_BUILD_DIR'):build=pathlib.Path(os.environ['VOICEKIT_QWEN_BUILD_DIR'])
+elif platform.system()=='Windows' and len(str(build))>60:build=pathlib.Path(tempfile.gettempdir())/('vkqw-'+hashlib.sha256(str(root).encode()).hexdigest()[:8])
 cmd=['cmake','-S',str(root/'server/qwen-worker'),'-B',str(build),'-DQWEN_SOURCE_DIR='+str(sources/'qwentts'),'-DGGML_SOURCE_DIR='+str(sources/'ggml'),'-DCMAKE_BUILD_TYPE=Release','-DGGML_NATIVE=OFF','-DGGML_METAL='+('ON' if darwin else 'OFF'),'-DGGML_METAL_EMBED_LIBRARY=OFF','-DBUILD_SHARED_LIBS=ON','-DGGML_VULKAN='+('ON' if args.vulkan else 'OFF')]
 if not darwin:cmd+=['-DGGML_BACKEND_DL=ON','-DGGML_CPU_ALL_VARIANTS=ON']
 if platform.system()=='Windows':cmd+=['-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded','-DGGML_OPENMP=OFF']

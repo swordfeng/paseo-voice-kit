@@ -1,20 +1,32 @@
 #!/usr/bin/env python3
 """Small chain-pull regression using stub engines and a local four-byte model fixture.
 This is not a plugin installation test; it never touches the live installation.
+Usage: python3 scripts/test-http-recovery.py [path/to/voicekit]
 """
 import hashlib
 import http.server
 import json
 import os
 from pathlib import Path
-import select
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.request
 
+
+def handshake(process, timeout=5):
+    """The server's first stdout line, read on a thread: select() on pipes doesn't work on Windows."""
+    box = {}
+    reader = threading.Thread(target=lambda: box.setdefault('line', process.stdout.readline()), daemon=True)
+    reader.start()
+    reader.join(timeout)
+    assert box.get('line'), 'no server handshake'
+    return json.loads(box['line'])
+
 root = Path(__file__).resolve().parents[1]
+binary = sys.argv[1] if len(sys.argv) > 1 else str(root / ('server/target/release/voicekit' + ('.exe' if os.name == 'nt' else '')))
 payload = b'tiny'
 requests = []
 class Fixture(http.server.BaseHTTPRequestHandler):
@@ -44,13 +56,12 @@ try:
                               personas=[dict(id='test', label='Test', gender='female', voices={'custom-leaf-a': 'voice', 'custom-leaf-b': 'voice'})]))])
         (folder / 'catalog.json').write_text(json.dumps(catalog))
         with (folder / 'stderr').open('w') as log:
-            p = subprocess.Popen([str(root / 'server/target/release/voicekit'), 'serve', '--stub', '--port', '0',
+            p = subprocess.Popen([binary, 'serve', '--stub', '--port', '0',
                 '--models-dir', str(folder / 'models'), '--catalog', str(folder / 'catalog.json'),
                 '--tts-model', 'custom-chain', '--coreml', 'false'],
                 stdout=subprocess.PIPE, stderr=log, bufsize=0, env={**os.environ, 'VOICEKIT_TOKEN': 'test'})
             try:
-                assert select.select([p.stdout], [], [], 5)[0], 'no server handshake'
-                port = json.loads(p.stdout.readline())['port']
+                port = handshake(p)['port']
                 def call(path, body=None):
                     req = urllib.request.Request(f'http://127.0.0.1:{port}'+path,
                         data=json.dumps(body).encode() if body is not None else None,

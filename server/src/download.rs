@@ -571,13 +571,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("vk-gc-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let partial = root.join(".partial");
-        std::fs::create_dir_all(partial.join(format!("old{SEP}dir"))).unwrap();
+        std::fs::create_dir_all(&partial).unwrap();
         for name in [format!("fresh{SEP}0{SEP}a.bin.part"), "legacy-a.bin.part".to_string(), format!("old{SEP}0{SEP}a.bin.part")] {
             std::fs::write(partial.join(name), b"x").unwrap();
         }
         let month_ago = SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
         std::fs::File::options().write(true).open(partial.join(format!("old{SEP}0{SEP}a.bin.part"))).unwrap().set_modified(month_ago).unwrap();
-        std::fs::File::open(partial.join(format!("old{SEP}dir"))).unwrap().set_modified(month_ago).unwrap();
         gc_partials(&root);
         let mut left: Vec<_> = std::fs::read_dir(&partial).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();

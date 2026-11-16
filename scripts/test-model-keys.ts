@@ -22,7 +22,8 @@ console.log("PASS settings never carry an API key");
 const remote = parsed.customModels[0];
 await setKey(remote.id, "  sk-secret  ", 1_000);
 const file = join(home, "plugin-data/voice-kit/model-keys.json");
-assert.equal(statSync(file).mode & 0o777, 0o600);
+// Windows has no POSIX permission bits; the file sits in the user's profile there.
+if (process.platform !== "win32") assert.equal(statSync(file).mode & 0o777, 0o600);
 assert.equal((await readKeys())[remote.id]?.apiKey, "sk-secret");
 const catalog = await writeCustomCatalog([remote]);
 const entry = JSON.parse(readFileSync(catalog.path, "utf8")).models.find((m: any) => m.id === remote.id);

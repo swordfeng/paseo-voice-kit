@@ -405,6 +405,10 @@ async fn speech(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> 
             if let Some(routing)=err.downcast_ref::<crate::engine::chain::RoutingError>() {
                 return api_error(if routing.code=="unsupported_language" {StatusCode::BAD_REQUEST} else {StatusCode::SERVICE_UNAVAILABLE},routing.code,&routing.to_string());
             }
+            // A single voice model asked for a language it doesn't speak: the request's fault.
+            if err.downcast_ref::<crate::engine::RequestFailure>().is_some_and(|f| f.code.as_deref() == Some("unsupported_language")) {
+                return api_error(StatusCode::BAD_REQUEST, "unsupported_language", &err.to_string());
+            }
             return api_error(StatusCode::SERVICE_UNAVAILABLE, "engine_error", &format!("{err:#}"));
         }
         Err(err) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", &err.to_string()),

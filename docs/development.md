@@ -17,8 +17,11 @@ copied to a temporary name and renamed, so a running server keeps its old file u
 reload.
 
 Default Cargo features are `coreml` on macOS (Metal is always on) and `vulkan-dl` on
-Linux and Windows. Override them with `CARGO_FEATURES`; set it empty for a plain CPU
-build. If `sccache` fails in a sandbox, run with `RUSTC_WRAPPER=`.
+Linux and Windows. Override them with `CARGO_FEATURES`; use `cpu-dl` for a CPU-only build
+in the release layout (an empty value builds fully static, which crashes on Linux at the first
+model load: whisper.cpp and ONNX Runtime both instantiate `std::regex`). On Windows the Qwen
+worker builds in a short folder under the temp directory when the checkout path is long
+(CMake's object path limit), or in `VOICEKIT_QWEN_BUILD_DIR`. If `sccache` fails in a sandbox, run with `RUSTC_WRAPPER=`.
 
 ## Plugin dependencies and packaging
 

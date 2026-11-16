@@ -9,7 +9,6 @@ import http.server
 import json
 import os
 from pathlib import Path
-import select
 import struct
 import subprocess
 import sys
@@ -17,8 +16,18 @@ import tempfile
 import threading
 import time
 
+
+def handshake(process, timeout=5):
+    """The server's first stdout line, read on a thread: select() on pipes doesn't work on Windows."""
+    box = {}
+    reader = threading.Thread(target=lambda: box.setdefault('line', process.stdout.readline()), daemon=True)
+    reader.start()
+    reader.join(timeout)
+    assert box.get('line'), 'no server handshake'
+    return json.loads(box['line'])
+
 root = Path(__file__).resolve().parents[1]
-binary = sys.argv[1] if len(sys.argv) > 1 else str(root / 'server/target/release/voicekit')
+binary = sys.argv[1] if len(sys.argv) > 1 else str(root / ('server/target/release/voicekit' + ('.exe' if os.name == 'nt' else '')))
 release = threading.Event()
 
 
@@ -75,8 +84,7 @@ with tempfile.TemporaryDirectory(prefix='vk-http-api-') as temporary:
                               '--catalog', str(folder / 'catalog.json'), '--coreml', 'false'],
                              stdout=subprocess.PIPE, stderr=log, bufsize=0, env={**os.environ, 'VOICEKIT_TOKEN': 'test'})
         try:
-            assert select.select([p.stdout], [], [], 5)[0], 'no server handshake'
-            port = json.loads(p.stdout.readline())['port']
+            port = handshake(p)['port']
 
             def call(method, path, body=None, headers=None, token='test', host=None):
                 connection = http.client.HTTPConnection('127.0.0.1', port, timeout=5)

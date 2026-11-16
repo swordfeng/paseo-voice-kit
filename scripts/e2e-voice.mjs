@@ -15,9 +15,11 @@ import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(join(process.cwd(), "plugin", "package.json"));
-const { createHostClient } = await import(require.resolve("@getpaseo/client/node"));
+// A file URL, not a path: Windows paths ("C:\\...") are not valid ESM specifiers.
+const { createHostClient } = await import(pathToFileURL(require.resolve("@getpaseo/client/node")).href);
 
 const outWav = process.argv[2] ?? join(tmpdir(), "voicekit-e2e-voice.wav");
 const home = process.env.PASEO_HOME ?? join(homedir(), ".paseo");
@@ -63,7 +65,10 @@ let agentId = null;
 const t0 = Date.now();
 try {
   const agent = await client.createAgent({
-    config: { provider: "claude", cwd, modeId: "bypassPermissions", model: process.env.E2E_MODEL ?? "claude-haiku-5-5" },
+    // E2E_PROVIDER / E2E_MODEL pick another agent (for example codex) where Claude isn't signed in.
+    config: process.env.E2E_PROVIDER
+      ? { provider: process.env.E2E_PROVIDER, cwd, ...(process.env.E2E_MODE ? { modeId: process.env.E2E_MODE } : {}), ...(process.env.E2E_MODEL ? { model: process.env.E2E_MODEL } : {}) }
+      : { provider: "claude", cwd, modeId: "bypassPermissions", model: process.env.E2E_MODEL ?? "claude-haiku-5-5" },
   });
   agentId = agent.id;
   const mode = await client.setVoiceMode(true, agentId);
@@ -121,10 +126,13 @@ try {
   // Creating the agent registered a workspace for the temp folder; archive it.
   try {
     const { execFileSync } = await import("node:child_process");
-    const list = JSON.parse(execFileSync("paseo", ["workspace", "ls", "--json"], { encoding: "utf8" }));
+    // Windows installs the CLI as paseo.cmd, which only runs through a shell.
+    const windows = process.platform === "win32";
+    const paseo = (args, options) => execFileSync(windows ? "paseo.cmd" : "paseo", args, { ...options, shell: windows });
+    const list = JSON.parse(paseo(["workspace", "ls", "--json"], { encoding: "utf8" }));
     for (const ws of Array.isArray(list) ? list : []) {
       const id = ws.id ?? ws.workspaceId;
-      if (id && JSON.stringify(ws).includes(cwd)) execFileSync("paseo", ["workspace", "archive", id], { stdio: "ignore" });
+      if (id && JSON.stringify(ws).includes(cwd)) paseo(["workspace", "archive", id], { stdio: "ignore" });
     }
   } catch (e) {
     console.error(`could not archive the e2e workspace for ${cwd}: ${e.message}`);
