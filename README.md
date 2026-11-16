@@ -3,7 +3,8 @@
 Voice Kit gives [Paseo](https://paseo.sh) local speech recognition and voices. It
 is a Paseo plugin plus a small native speech server (`voicekit`). The plugin runs
 the server on the daemon machine and points Paseo's dictation and voice mode at it.
-If Voice Kit isn't ready, Paseo uses its built-in speech instead.
+If Voice Kit isn't ready, Paseo goes back to your previous voice settings, or its built-in
+speech if you had none.
 
 ## What you get
 
@@ -51,8 +52,8 @@ The speech server (`voicekit`) is a separate native program. Prebuilt servers fo
 first time Voice Kit needs a server version, it asks before downloading the one for your
 platform and shows where it comes from; a plugin update that needs a new server version asks
 again. The download is checked against a SHA-256 pinned in the plugin, then unpacked into
-`~/.paseo/plugin-data/voice-kit/bin/`. If you decline, Voice Kit turns off and Paseo keeps its
-built-in speech. Voice Kit only runs the server version it was written for: a local build or a
+`~/.paseo/plugin-data/voice-kit/bin/`. If you decline, nothing is downloaded, Voice Kit turns off and
+your voice settings stay as they were. Voice Kit only runs the server version it was written for: a local build or a
 Binary path server of another version isn't started, and the status says which version is
 needed.
 
@@ -136,7 +137,7 @@ the Command Center (⌘K), or from Settings > Plugins.
 The Voice Kit switch at the top turns everything on or off.
 
 A managed speech server download requires your confirmation; local builds do not.
-Declining keeps Paseo’s built-in speech. Model weights download separately.
+Declining leaves your voice settings as they were. Model weights download separately.
 
 Models are stored in `~/.paseo/plugin-data/voice-kit/models`. Parakeet v3 and
 SenseVoice, which Paseo uses in exactly the same form, are kept once in Paseo's own model
@@ -147,7 +148,8 @@ are never deleted.
 ## When Voice Kit isn't available
 
 - While the server starts, a model downloads, or something fails, the affected
-  feature uses another ready Voice Kit model or Paseo's built-in speech.
+  feature uses another ready Voice Kit model, or your previous voice settings (Paseo's
+  built-in speech if you had none).
 - Turning Voice Kit off or removing the plugin restores your previous voice
   settings.
 - If you change a feature in Paseo's Settings > Voice, Voice Kit stops managing it

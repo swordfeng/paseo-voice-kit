@@ -30,7 +30,7 @@
     "typescript": "^5.9.3",
     "zod": "^4.4.3"
   },
-  "description": "Local speech recognition and voices for Paseo, with automatic fallback to built-in speech.",
+  "description": "Local speech recognition and voices for Paseo, falling back to your previous voice settings when they can't run.",
   "license": "MIT",
   "repository": {
     "type": "git",

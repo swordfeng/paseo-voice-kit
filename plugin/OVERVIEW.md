@@ -1,45 +1,60 @@
-Voice Kit runs speech recognition and voices on the daemon machine and points Paseo's dictation and voice mode at them. What you say and the replies it reads aloud stay on that machine, unless you add a remote speech server yourself; that server then receives the audio or text it handles.
+Voice Kit runs speech recognition and voices on the computer where the Paseo daemon runs, and Paseo's dictation and voice mode use them.
 
 ## How it works
 
-Voice Kit starts a small native speech server (voicekit) next to the daemon. When a model is ready, it switches dictation, voice mode listening and voice mode speaking to it. While the server starts, a model downloads, or something fails, Paseo uses its built-in speech, so voice keeps working. Turning Voice Kit off or removing it restores your previous voice settings, including any OpenAI key.
+Voice Kit runs a speech server, voicekit, on the same computer as the daemon. When a model is ready, Voice Kit switches dictation, voice mode listening and voice mode speaking to it. While the server starts or a model downloads, and when something fails, Paseo goes back to your previous voice settings, or to its built-in speech if you had none. Turning Voice Kit off or removing it restores your previous voice settings, including any OpenAI key.
 
 If you change a voice setting yourself in Settings > Voice, Voice Kit stops managing that feature until you choose "Use Voice Kit" on its page.
 
 ## Setup
 
-The speech server is a separate native program. Prebuilt servers for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the project's v0.1.1 release on GitHub. The first time Voice Kit needs a server version, it asks before downloading the one for your platform, shows where it comes from and checks it against a pinned checksum. A plugin update that needs a new server version asks again. Declining turns Voice Kit off and leaves Paseo's built-in speech in place. You can also point the Binary path setting at your own build; installation and build instructions are in the [README](https://github.com/swordfeng/paseo-voice-kit#readme).
+The speech server is a separate program. Ready-made servers for macOS (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) come from the project's v0.1.1 release on GitHub. Before Voice Kit downloads a server version, it asks you, shows where the download comes from, and checks it against a fixed checksum. A plugin update that needs a new server version asks again. If you decline, nothing is downloaded, Voice Kit turns off, and your voice settings stay as they were. You can also point the "Binary path" setting at your own build; build instructions are in the [README](https://github.com/swordfeng/paseo-voice-kit#readme).
 
-The built-in Qwen3-TTS models run in Voice Kit's own native worker. Qwen3-TTS models you add for MLX run in a native MLX helper that comes with the speech server, so there's nothing else to install. They need a Mac with Apple Silicon and macOS 14 or later, and their weights download separately, like other models.
+The built-in Qwen3-TTS models run in a helper program that comes with the speech server. Qwen3-TTS models you add for MLX run in another helper that comes with it too; they need a Mac with Apple Silicon and macOS 14 or later. Their weights download separately, like other models.
 
-Requires Paseo 0.15.4 or later with plugins enabled. Version 0.1.1 was checked on Macs with Apple Silicon and on Windows with an NVIDIA GPU, including a clean install of the published release on both, and on Linux on the CPU and on an NVIDIA GPU under WSL. On every release platform, automated tests build the server, run its native tests, unpack the archive as Voice Kit does and run short checks with real models on the CPU. Intel Macs, native Linux GPU drivers and AMD or Intel GPUs haven't been checked.
+Voice Kit needs Paseo 0.15.4 or later with plugins enabled. Version 0.1.1 was checked by hand on Macs with Apple Silicon and on Windows with an NVIDIA GPU, including a fresh install on both, and on Linux on the CPU and with an NVIDIA GPU under WSL. Automated checks with real models run on the CPU for every release platform. GPU speech on Intel Macs, on native Linux GPU drivers and on AMD or Intel GPUs hasn't been checked.
+
+## Where your data goes
+
+Your speech is turned into text on that computer, and replies are read aloud there. Voice Kit sends nothing to an outside speech service unless you add one yourself. What it turns into text still goes into Paseo as your message, and from there to your agent's provider, as it would if you typed it.
+
+If you add a remote speech server under "Your models", that server receives the audio or text it handles, your vocabulary hints, and the API key you entered for it.
 
 ## Models
 
-The defaults work in many languages without changing anything:
+The defaults work in many languages without changing anything.
 
-- Listening: Voice Kit picks a default multilingual model for the machine once, used for both dictation and voice mode until you choose another; your choice then stays. On Macs that is Whisper turbo (about 100 languages, with punctuation) on the GPU. On Linux and Windows, Voice Kit checks the GPU once and uses Whisper turbo if it is fast enough, otherwise Qwen3-ASR (about 30 languages) on the CPU. You can choose a different model for dictation and for voice mode.
-- Speaking: you choose which voice models to use and in what order; each sentence uses the first enabled model that natively speaks its language. New installs start with Supertonic 3 alone (31 languages, on the CPU). Qwen3-TTS 0.6B and 1.7B speak 10 languages; they are optional, download only after you enable them, use the GPU when available (checked on Apple Silicon Macs and on NVIDIA GPUs under Windows and WSL). If the GPU can't run them, they switch to the CPU and the model's card says so. A reply with text in a language none of your enabled models speaks is refused rather than read with the wrong pronunciation, and the page names a model that could speak it. Each voice model has its own voice, chosen and previewed on its card; by default Supertonic 3 and Qwen3-TTS use two similar voices, so mixed-language replies sound alike.
-- Alternatives: Parakeet v3 for European languages, Dolphin small for Asian and Middle Eastern languages, SenseVoice and Whisper small. Each model card explains what it is good at and its limits.
+Listening:
 
-Models download from Hugging Face and GitHub into `~/.paseo/plugin-data/voice-kit/models` and are checked against pinned checksums. They download as soon as you choose them unless you turn off "Download models automatically". Parakeet v3 and SenseVoice share Paseo's own copies: they download once, both apps show them, and removing them removes them for Paseo too. Downloaded models keep their own licenses, listed in MODEL_LICENSES.md; Supertonic 3's OpenRAIL-M license includes use restrictions.
+- Voice Kit picks one multilingual model for the computer, for both dictation and voice mode, until you choose another. On Macs that is Whisper turbo (about 100 languages, with punctuation) on the GPU. On Linux and Windows, Voice Kit tests the GPU once and uses Whisper turbo if it is fast enough, otherwise Qwen3-ASR (about 30 languages) on the CPU.
+- You can choose a different model for dictation and for voice mode.
+- Other models: Parakeet v3 for European languages, Dolphin small for Asian and Middle Eastern languages, SenseVoice and Whisper small. Each model's card says what it is good at and where it falls short.
 
-On Macs you can turn on Neural Engine for Whisper under Advanced, in the experimental options. It speeds up Whisper only; Whisper uses the GPU (Metal) without it. It needs a 1.2 GB download and a one-time setup of several minutes, then makes Whisper about 2.5 times faster. It is off by default.
+Speaking:
+
+- You choose which voice models to use and in what order. By default, each sentence uses the first enabled model that speaks its language natively. You can choose a different first choice for a language, or let a language be read approximately by a model that doesn't speak it natively.
+- Without those settings, Voice Kit doesn't read a reply that contains a language none of your enabled models speaks, so nothing is read with the wrong pronunciation. The page names a model that could speak it. Very short text in Latin letters whose language can't be detected is read as English.
+- New installs start with Supertonic 3 alone: 31 languages, on the CPU. Qwen3-TTS 0.6B and 1.7B speak 10 languages. They are optional, download only after you enable them, and use the GPU when they can (checked on Apple Silicon Macs and NVIDIA GPUs). If the GPU can't run them, they run on the CPU and the model's card says so.
+- Each voice model has its own voice, chosen and previewed on its card. By default Supertonic 3 and Qwen3-TTS use two similar voices, so replies that mix languages sound alike.
+
+Built-in models download from Hugging Face and GitHub into Voice Kit's data folder (`~/.paseo/plugin-data/voice-kit/models` by default) and are checked against fixed checksums. They download as soon as you choose them unless you turn off "Download models automatically". Parakeet v3 and SenseVoice use Paseo's own copies: they download once, both Voice Kit and Paseo show them, and removing them removes them for Paseo too. Downloaded models keep their own licenses, listed in MODEL_LICENSES.md; Supertonic 3's OpenRAIL-M license includes use restrictions.
+
+On Macs you can turn on Neural Engine for Whisper under Advanced, among the experimental options. It speeds up Whisper only; without it Whisper uses the GPU. It needs a 1.2 GB download and a one-time setup that takes several minutes. It is off by default.
 
 ## Your own models
 
-Under "Your models" you can add a model from Hugging Face (Voice Kit recognizes Whisper and sherpa-onnx models, pins the exact revision and verifies large files), another OpenAI-compatible speech server, a Whisper model file or URL, or a sherpa-onnx model folder or archive. API keys for servers are stored on the daemon host in a file readable only by your user. They can be entered or replaced but are never sent back to Paseo apps.
+Under "Your models" you can add a Whisper or sherpa-onnx model from Hugging Face (Voice Kit keeps it at the version you added and checks its large files), another OpenAI-compatible speech server, a Whisper model file or URL, or a sherpa-onnx model folder or archive. API keys for servers are stored on the daemon's computer, in a file only your user account can read. You can enter or replace a key, but it is never sent back to Paseo apps.
 
 ## Settings
 
-Open Voice Kit from its row at the bottom of the sidebar (the dot shows its status), by typing /voicekit, from the Command Center, or from Settings > Plugins. The page follows Paseo's app language.
+Open Voice Kit from its entry at the bottom of the sidebar (the dot shows its status), by typing /voicekit, from the Command Center, or from Settings > Plugins. The page uses Paseo's app language.
 
-- Listening: which listening features use Voice Kit, their models, language and vocabulary, then the speech recognition models and your own.
-- Speaking: voice mode speaking, speed and "Try a reply", then the ordered voice model list with each model's voice and preview, language coverage and the voice models you can add.
-- Advanced: the sidebar row, acceleration, unloading idle models, port, a custom server binary and the server log. Each model loads when it is first needed and unloads on its own after 10 minutes unused by default.
+- Listening: which listening features use Voice Kit, their models, language and vocabulary, then the speech recognition models, including your own.
+- Speaking: voice mode speaking, speed and "Try a reply", then your voice models in order, each with its voice and preview, the languages they cover, and the voice models you can add.
+- Advanced: the sidebar entry, acceleration, unloading idle models, port, your own server binary and the server log. Each model loads when it is first needed and, by default, unloads after 10 minutes unused.
 
 ## Limits
 
-- The server listens only on 127.0.0.1, answers only requests addressed to a loopback host, and requires a token that changes every time it starts.
-- To keep voice mode turn detection working, Voice Kit sets `providers.local.modelsDir` in the daemon config to Paseo's default model folder and reloads the daemon config once.
+- The speech server listens only on 127.0.0.1 and answers only requests addressed to this computer. Every request except a health check needs a token that changes each time the server starts.
+- So that voice mode turn detection keeps working, Voice Kit sets `providers.local.modelsDir` in the daemon config to Paseo's default model folder if it isn't set, and may reload the daemon config once when it starts.
 - Environment variables that set Paseo's speech options on the daemon take precedence; those features show as locked.

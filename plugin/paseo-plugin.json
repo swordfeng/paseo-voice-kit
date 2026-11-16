@@ -1,7 +1,7 @@
 {
   "id": "voice-kit",
   "name": "Voice Kit",
-  "description": "Local speech recognition and voices for Paseo, with automatic fallback to built-in speech.",
+  "description": "Local speech recognition and voices for Paseo, falling back to your previous voice settings when they can't run.",
   "media": [
     "assets/voice-kit-speaking.png",
     "assets/voice-kit-listening.png",
@@ -14,7 +14,7 @@
   "translations": {
     "zh-CN": {
       "name": "Voice Kit",
-      "description": "为 Paseo 提供本地语音识别和语音合成，出现问题时自动改用内置语音。"
+      "description": "为 Paseo 提供本地语音识别和语音合成，无法运行时自动回到你之前的语音设置。"
     }
   },
   "build": [
