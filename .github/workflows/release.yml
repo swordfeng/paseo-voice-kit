@@ -167,6 +167,12 @@ jobs:
           key: ${{ matrix.features }}-ws-${{ hashFiles('build/native-inputs.json') }}
           cache-workspace-crates: true
           cache-on-failure: true
+      - name: Show restored build state (temporary, while tuning the cache)
+        shell: bash
+        run: |
+          ls server/target/release/.fingerprint 2>/dev/null | grep -E "whisper|sherpa" || echo "no whisper/sherpa fingerprints"
+          ls server/target/release/build 2>/dev/null | grep -E "whisper|sherpa" || echo "no whisper/sherpa build dirs"
+          du -sh server/target/release/build/whisper-rs-sys-* 2>/dev/null || true
       - name: Discard incompatible Visual Studio CMake cache
         if: runner.os == 'Windows'
         shell: pwsh
@@ -280,14 +286,18 @@ jobs:
         id: mlx-key
         if: matrix.key == 'darwin-arm64'
         shell: bash
-        run: echo "xcode=$(xcodebuild -version | tr -s ' \n' '-')" >> "$GITHUB_OUTPUT"
+        # Git object IDs of the committed sources: unlike hashFiles, unaffected by the .build
+        # folder the build creates before the save step computes the key again.
+        run: |
+          echo "xcode=$(xcodebuild -version | tr -s ' \n' '-')" >> "$GITHUB_OUTPUT"
+          echo "src=$(git rev-parse HEAD:server/mlx-worker HEAD:scripts/build-mlx-worker.py | tr '\n' '-' | cut -c1-83)" >> "$GITHUB_OUTPUT"
       - name: Restore bundled native MLX worker
         id: mlx-cache
         if: ${{ matrix.key == 'darwin-arm64' && !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/cache/restore@v4
         with:
           path: server/target/release/mlx-runtime
-          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py') }}
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ steps.mlx-key.outputs.src }}
       - name: Build bundled native MLX worker
         if: matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -299,7 +309,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: server/target/release/mlx-runtime
-          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py') }}
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ steps.mlx-key.outputs.src }}
       - name: Package
         shell: bash
         run: |
