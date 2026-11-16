@@ -126,6 +126,14 @@ on the unpacked asset with `--accelerator cpu` (short real-model checks, see
 `scripts/test-sve-dots.py --require-sve`, which checks the packaged SVE dot-product kernels
 against exact scalar results.
 
+To keep pull requests quick, CI reuses work whose inputs haven't changed. The Qwen worker and
+the MLX helper are cached by a hash of their sources, build scripts, the workflow and the
+runner image (plus Xcode for MLX). The smoke test's model downloads are cached once for all
+platforms, keyed by `server/catalog.json`. Release tags never use these caches: everything
+they publish is built from source and tested against fresh downloads. A pull request that only
+changes `docs/`, the README, the plugin's overviews or model license list, `plugin/client/`
+or `plugin/assets/` skips the native builds; the plugin job still runs.
+
 Tested beyond CI: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu 22.04,
 clang 14), including real Whisper transcription with and without a Vulkan loader, and
 lavapipe; Linux x64 the same way under emulation, running `devices` and a Whisper encoder

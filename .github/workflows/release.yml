@@ -32,10 +32,32 @@ env:
 jobs:
   platforms:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
+      native: ${{ steps.changes.outputs.native }}
     steps:
       - uses: actions/checkout@v4
+      # A pull request that only changes docs or the plugin's own UI needs no native build; the
+      # plugin job still checks it. Tags, manual runs and anything else build every platform.
+      - id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          native=true
+          if [ -n "$PR" ]; then
+            native=false
+            while IFS= read -r file; do
+              case "$file" in
+                docs/*|README.md|LICENSE|plugin/client/*|plugin/assets/*|plugin/OVERVIEW*.md|plugin/MODEL_LICENSES.md) ;;
+                *) native=true; echo "native change: $file" ;;
+              esac
+            done < <(gh api --paginate "repos/${{ github.repository }}/pulls/$PR/files" --jq '.[].filename')
+          fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
       - id: select
         env:
           PLATFORM: ${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}
@@ -53,6 +75,7 @@ jobs:
 
   build:
     needs: platforms
+    if: needs.platforms.outputs.native == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
@@ -162,23 +185,65 @@ jobs:
           cargo metadata --locked --format-version 1 --filter-platform "$host" --features "${{ matrix.features }}" --manifest-path server/Cargo.toml > "$RUNNER_TEMP/cargo-metadata.json"
           python3 scripts/collect-licenses.py "$RUNNER_TEMP/cargo-metadata.json" "$RUNNER_TEMP/voicekit-notices"
           echo "VOICEKIT_NOTICES=$RUNNER_TEMP/voicekit-notices" >> "$GITHUB_ENV"
+      # Workers are rebuilt only when their inputs change: the key covers their sources, build
+      # scripts, this workflow (toolchain pins) and the runner image. Release tags always build
+      # from source and never use or fill these caches.
+      - name: Runner image for worker cache keys
+        id: runner-image
+        shell: bash
+        run: |
+          echo "version=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+          # A restore unpacks over what is there; start from empty folders.
+          rm -rf server/target/release/gguf-runtime server/target/release/mlx-runtime
+      - name: Restore Qwen GGUF worker
+        id: qwen-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/release/gguf-runtime
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt', '.github/workflows/release.yml') }}
       - name: Build isolated Qwen GGUF worker
+        if: steps.qwen-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           flags=()
           if [[ "${{ runner.os }}" != "macOS" ]]; then flags+=(--vulkan); fi
           python3 scripts/build-qwen-worker.py --target-dir server/target/release "${flags[@]}"
+      - name: Save Qwen GGUF worker
+        if: ${{ steps.qwen-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/release/gguf-runtime
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt', '.github/workflows/release.yml') }}
       - name: Select Swift build tools
         if: matrix.key == 'darwin-arm64'
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-      - name: Build bundled native MLX worker
+      - name: MLX worker cache key
+        id: mlx-key
         if: matrix.key == 'darwin-arm64'
+        shell: bash
+        run: echo "xcode=$(xcodebuild -version | tr -s ' \n' '-')" >> "$GITHUB_OUTPUT"
+      - name: Restore bundled native MLX worker
+        id: mlx-cache
+        if: ${{ matrix.key == 'darwin-arm64' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/release/mlx-runtime
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py', '.github/workflows/release.yml') }}
+      - name: Build bundled native MLX worker
+        if: matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           xcodebuild -downloadComponent MetalToolchain
           python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 900
+      - name: Save bundled native MLX worker
+        if: ${{ matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/release/mlx-runtime
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py', '.github/workflows/release.yml') }}
       - name: Package
         shell: bash
         run: |
@@ -238,6 +303,27 @@ jobs:
         if: matrix.key == 'linux-arm64'
         shell: bash
         run: python3 scripts/test-sve-dots.py "$(dirname "$EXE")" --require-sve
+      # The smoke test's models are the same on every platform, so one cache serves all five. The
+      # larger Qwen model (only Windows and Linux x64 test it) has its own entry. Keyed by the
+      # catalog, which pins every file's checksum. Release tags download fresh.
+      - name: Restore real-model downloads
+        id: models-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ci-models
+            !.ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
+          key: real-models-${{ hashFiles('server/catalog.json') }}
+          enableCrossOsArchive: true
+      - name: Restore the larger Qwen model
+        id: large-model-cache
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && (matrix.key == 'win32-x64' || matrix.key == 'linux-x64') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
+          key: real-models-large-${{ hashFiles('server/catalog.json') }}
+          enableCrossOsArchive: true
       - name: Real model CPU inference and round trips
         id: real-models
         timeout-minutes: 12
@@ -248,7 +334,7 @@ jobs:
             extra+=(--large-qwen)
           fi
           python3 scripts/smoke-real-models.py --exe "$EXE" \
-            --models-dir "$RUNNER_TEMP/real-models" --output "$RUNNER_TEMP/real-model-report" \
+            --models-dir "$GITHUB_WORKSPACE/.ci-models" --output "$RUNNER_TEMP/real-model-report" \
             --accelerator cpu --timeout 540 "${extra[@]}"
       - name: Diagnose Linux ARM CPU variant failures
         if: failure() && steps.real-models.outcome == 'failure' && matrix.key == 'linux-arm64'
@@ -267,9 +353,25 @@ jobs:
             fi
           done
           python3 scripts/smoke-real-models.py --exe "$EXE" \
-            --models-dir "$RUNNER_TEMP/real-models" \
+            --models-dir "$GITHUB_WORKSPACE/.ci-models" \
             --output "$RUNNER_TEMP/real-model-report/baseline" \
             --accelerator cpu --timeout 540
+      - name: Save real-model downloads
+        if: ${{ success() && steps.models-cache.outcome == 'success' && steps.models-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .ci-models
+            !.ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
+          key: real-models-${{ hashFiles('server/catalog.json') }}
+          enableCrossOsArchive: true
+      - name: Save the larger Qwen model
+        if: ${{ success() && steps.large-model-cache.outcome == 'success' && steps.large-model-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
+          key: real-models-large-${{ hashFiles('server/catalog.json') }}
+          enableCrossOsArchive: true
       - name: Preserve real model diagnostics
         if: always()
         uses: actions/upload-artifact@v4
