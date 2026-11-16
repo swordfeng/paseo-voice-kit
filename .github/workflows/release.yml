@@ -158,7 +158,12 @@ jobs:
           ninja --version
       - name: Locked archive verifier dependencies
         run: npm ci --prefix plugin --ignore-scripts
-      - uses: dtolnay/rust-toolchain@stable
+      # A fixed toolchain: releases don't change compiler with each stable release, the Rust cache
+      # isn't invalidated every six weeks, and Cargo's target layout is the one rust-cache knows
+      # (newer Cargo's layout lost whisper-rs-sys's fingerprints in the cache, so it rebuilt).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
