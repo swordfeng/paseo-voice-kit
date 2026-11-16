@@ -264,11 +264,11 @@ export const ptBR: Messages = {
     },
     qwen06Gguf: {
       label: "Qwen3-TTS 0.6B",
-      description: "Chinês, inglês, japonês, coreano, alemão, francês, russo, português, espanhol e italiano, com 9 vozes; cada voz fala todos eles. Duas vozes falam chinês no dialeto de Pequim ou de Sichuan. Usa a GPU quando disponível; caso contrário, a CPU. Testado em Macs com Apple Silicon; outros computadores não foram testados.",
+      description: "Chinês, inglês, japonês, coreano, alemão, francês, russo, português, espanhol e italiano, com 9 vozes; cada voz fala todos eles. Duas vozes falam chinês no dialeto de Pequim ou de Sichuan. Usa a GPU quando disponível; caso contrário, a CPU. Testado em Macs com Apple Silicon e em GPUs NVIDIA; outras GPUs não foram testadas.",
     },
     qwen17Gguf: {
       label: "Qwen3-TTS 1.7B",
-      description: "O modelo Qwen3-TTS maior: os mesmos 10 idiomas e 9 vozes, com um download maior. Usa a GPU quando disponível; caso contrário, a CPU. Testado em Macs com Apple Silicon; outros computadores não foram testados.",
+      description: "O modelo Qwen3-TTS maior: os mesmos 10 idiomas e 9 vozes, com um download maior. Usa a GPU quando disponível; caso contrário, a CPU. Testado em Macs com Apple Silicon e em GPUs NVIDIA; outras GPUs não foram testadas.",
     },
   },
   voiceModels: {
