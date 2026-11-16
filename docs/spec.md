@@ -604,7 +604,7 @@ the installed models read in place).
 
 | Step | Result |
 | --- | --- |
-| 1 Automated | Pass: 72 Rust tests, 138 plugin checks, typecheck, Python unit tests, `test-http-api.py`, `test-http-recovery.py`, the npm artifact check and the darwin-arm64 archive check (2028 files, `voicekit 0.1.1`). CI on the other platforms not run. |
+| 1 Automated | Pass: 72 Rust tests, 138 plugin checks, typecheck, Python unit tests, `test-http-api.py`, `test-http-recovery.py`, the npm artifact check and the darwin-arm64 archive check (2028 files, `voicekit 0.1.1`). CI on all five platforms passed for the `v0.1.1` tag (`2e95cae`), and the published archives match `SHA256SUMS`. |
 | 2 Clean install | Not run: the pinned release is still 0.1.0, which INST-7 refuses, so a clean install has to wait for the 0.1.1 release (INST-7a). The approval and download path is covered by `T:supervisor`. Dictation (`e2e-dictation.mjs`) and the voice-mode round trip (`e2e-voice.mjs`: "Round trip successful.") pass on the installed build. |
 | 3 Reinstall over 0.1.1 | Pass: redeployed several times; settings, models, the custom Kokoro and MLX models and the remembered voices survived. |
 | 4 Settings ownership | Pass: off restores all three Paseo settings exactly as saved before the takeover; on takes them over again and keeps the saved originals. Environment locks and Settings > Voice edits by `T:speech-switch`; removing the plugin not run (it deletes the plugin's settings). |

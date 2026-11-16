@@ -93,15 +93,14 @@ afterwards.
 
 ## Releases
 
-v0.1.0 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.0).
-0.1.1 (Qwen3-TTS speed and stable GGUF sampling) is being prepared and isn't tagged or
-published; `plugin/shared/release.ts` still pins 0.1.0. Its source passed the real-model CPU
-checks on all five platforms, in separate manual CI runs rather than one all-green run:
-darwin-arm64, linux-arm64 and linux-x64 at `6ef5128`, and win32-x64 and darwin-x64 at
-`55d84e2`, which differs only in a test fixture. The tagged release still has to pass its own
-gates, and its public checksums must be verified, before `release.ts` changes. Method and
-results are in [eval.md](eval.md#real-model-cpu-checks-for-011-2026-11-14). GPU inference on
-Windows, Linux and Intel Macs stays unverified.
+v0.1.1 is published on [GitHub Releases](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.1)
+and pinned in `plugin/shared/release.ts`. Its tag passed CI on all five platforms, the
+published archives match `SHA256SUMS`, and the darwin-arm64 archive was unpacked and checked
+(`voicekit 0.1.1`, both workers built for macOS 14). Platform results, including GPU checks
+on Windows and on Linux through WSL, are in the spec's release checklist
+([spec.md](spec.md)) and in [eval.md](eval.md). Intel Macs, native Linux GPU drivers and
+AMD/Intel GPUs remain unchecked.
+
 `plugin/shared/release.ts` pins each platform's archive URL and SHA-256; a local build
 (`dev-install.sh`) or the Binary path setting takes precedence over it.
 
@@ -138,7 +137,7 @@ To publish, push a `v*` tag. CI builds every platform's asset and publishes them
 `SHA256SUMS`. Then pin them for the plugin:
 
 ```bash
-node scripts/release-manifest.mjs v0.1.0
+node scripts/release-manifest.mjs v0.1.1
 ```
 
 ## Packaging a local build
