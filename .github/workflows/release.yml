@@ -172,12 +172,6 @@ jobs:
           key: ${{ matrix.features }}-ws-${{ hashFiles('build/native-inputs.json') }}
           cache-workspace-crates: true
           cache-on-failure: true
-      - name: Show restored build state (temporary, while tuning the cache)
-        shell: bash
-        run: |
-          ls server/target/release/.fingerprint 2>/dev/null | grep -E "whisper|sherpa" || echo "no whisper/sherpa fingerprints"
-          ls server/target/release/build 2>/dev/null | grep -E "whisper|sherpa" || echo "no whisper/sherpa build dirs"
-          du -sh server/target/release/build/whisper-rs-sys-* 2>/dev/null || true
       - name: Discard incompatible Visual Studio CMake cache
         if: runner.os == 'Windows'
         shell: pwsh
@@ -228,9 +222,6 @@ jobs:
       - name: Test
         working-directory: server
         shell: bash
-        # Logs why Cargo rebuilds a crate (temporary, while tuning the cache).
-        env:
-          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: cargo test --locked --release --features "${{ matrix.features }}"
       - name: Build
         working-directory: server
@@ -258,8 +249,12 @@ jobs:
         id: runner-image
         shell: bash
         run: |
-          pins=$(python3 -c 'import hashlib, os; print(hashlib.sha256((os.environ["VULKAN_CONDA_PACKAGES"] + " " + os.environ["VULKAN_SDK_VERSION"]).encode()).hexdigest()[:12])')
-          echo "version=${ImageOS:-unknown}-${ImageVersion:-unknown}-vk$pins" >> "$GITHUB_OUTPUT"
+          # The OS, the C compiler's version line and the Vulkan pins, not the exact runner image:
+          # images roll out gradually, so consecutive jobs can land on different ones.
+          compiler=$("${CC:-cc}" --version 2>&1 | head -1)
+          echo "compiler: $compiler"
+          id=$(COMPILER="$compiler" python3 -c 'import hashlib, os; print(hashlib.sha256((os.environ["COMPILER"] + " " + os.environ["VULKAN_CONDA_PACKAGES"] + " " + os.environ["VULKAN_SDK_VERSION"]).encode()).hexdigest()[:16])')
+          echo "version=${ImageOS:-unknown}-$id" >> "$GITHUB_OUTPUT"
           # A restore unpacks over what is there; start from empty folders.
           rm -rf server/target/release/gguf-runtime server/target/release/mlx-runtime
       - name: Restore Qwen GGUF worker
