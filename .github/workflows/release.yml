@@ -217,6 +217,9 @@ jobs:
       - name: Test
         working-directory: server
         shell: bash
+        # Logs why Cargo rebuilds a crate (temporary, while tuning the cache).
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: cargo test --locked --release --features "${{ matrix.features }}"
       - name: Build
         working-directory: server
