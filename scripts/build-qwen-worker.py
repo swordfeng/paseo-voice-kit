@@ -5,12 +5,14 @@ p=argparse.ArgumentParser();p.add_argument('--target-dir',required=True);p.add_a
 root=pathlib.Path(__file__).resolve().parents[1];dest=pathlib.Path(args.target_dir).resolve()/'gguf-runtime'
 work=root/'server'/'target'/'qwen-worker';sources=work/'sources';sources.mkdir(parents=True,exist_ok=True)
 manifest=json.loads((root/'server/vendor/qwen-sources/SOURCES.json').read_text())
+# Sources are patched below, so a change to this script extracts them again.
+script_id=hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:16]
 for name,record in manifest.items():
  archive=root/'server/vendor/qwen-sources'/name
  if hashlib.sha256(archive.read_bytes()).hexdigest()!=record['sha256']:raise RuntimeError('source checksum mismatch: '+name)
  folder=sources/('qwentts' if name.startswith('qwentts') else 'ggml')
  stamp=folder/'.voicekit-source-sha'
- if not stamp.exists() or stamp.read_text()!=record['sha256']:
+ if not stamp.exists() or stamp.read_text()!=record['sha256']+' '+script_id:
   if folder.exists():shutil.rmtree(folder)
   folder.mkdir()
   with tarfile.open(archive) as t:
@@ -19,7 +21,7 @@ for name,record in manifest.items():
     if not pieces:continue
     if '..' in pieces or member.issym() or member.islnk():raise RuntimeError('unsafe source archive member')
     member.name='/'.join(pieces);t.extract(member,folder,filter='data')
-  stamp.write_text(record['sha256'])
+  stamp.write_text(record['sha256']+' '+script_id)
 # Expose a private count adapter inside the pinned tokenizer's translation unit.
 # The source archive stays intact; the adapter is copied into generated sources.
 adapter=root/'server/qwen-worker/token-count.inc'
@@ -27,17 +29,35 @@ shutil.copy2(adapter,sources/'qwentts/src/voicekit-token-count.inc')
 source=sources/'qwentts/src/qwen.cpp'
 include='\n#include "voicekit-token-count.inc"\n'
 if include not in source.read_text():source.write_text(source.read_text()+include)
-# WSL's Dozen driver (Vulkan on D3D12) advertises the Vulkan memory model but can't create the
-# argsort_large pipelines that rely on it, so the worker aborted on its first request. Treating
-# Dozen as lacking the memory model makes ggml report sorts wider than one workgroup (Qwen's
-# 2048-entry sampling sort) as unsupported, and the scheduler runs them on the CPU instead.
-vulkan=sources/'ggml/src/ggml-vulkan/ggml-vulkan.cpp'
-old='device->vulkan_memory_model = vk12_features.vulkanMemoryModel;'
-new='device->vulkan_memory_model = vk12_features.vulkanMemoryModel && device->driver_id != vk::DriverId::eMesaDozen; // voicekit: Dozen'
-text=vulkan.read_text(encoding='utf8')
-if new not in text:
- if text.count(old)!=1:raise RuntimeError('ggml-vulkan memory model line not found; update the Dozen patch')
- vulkan.write_text(text.replace(old,new),encoding='utf8')
+# WSL's Dozen driver (Vulkan on D3D12) can't create ggml's argsort_large pipelines, which use
+# the Vulkan memory model (workgroupcoherent buffers, scoped barriers), so the worker aborted
+# on its first request: Qwen sorts its 2048-entry sampling logits in a graph run directly on
+# the GPU. Build a second variant with plain coherent buffers and barrier() (GLSL 450
+# semantics) and use it on Dozen only; every other driver keeps the upstream shader.
+def patch(path,edits):
+ text=path.read_text(encoding='utf8')
+ for old,new in edits:
+  if new in text:continue
+  if text.count(old)!=1:raise RuntimeError('Dozen patch no longer matches '+path.name+': '+old[:60])
+  text=text.replace(old,new)
+ path.write_text(text,encoding='utf8')
+vk=sources/'ggml/src/ggml-vulkan'
+patch(vk/'vulkan-shaders/argsort_large.comp',[
+ ('#extension GL_KHR_memory_scope_semantics : enable\n#pragma use_vulkan_memory_model\n',
+  '#ifndef ARGSORT_COMPAT\n#extension GL_KHR_memory_scope_semantics : enable\n#pragma use_vulkan_memory_model\n#define ARGSORT_COHERENT workgroupcoherent\n#define ARGSORT_BARRIER() controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease)\n#else\n// voicekit: without the Vulkan memory model, for drivers that cannot build it (WSL Dozen).\n#define ARGSORT_COHERENT coherent\n#define ARGSORT_BARRIER() memoryBarrierBuffer(); barrier()\n#endif\n'),
+ ('layout (binding = 1) workgroupcoherent buffer B','layout (binding = 1) ARGSORT_COHERENT buffer B'),
+ ('layout (binding = 2) workgroupcoherent buffer D','layout (binding = 2) ARGSORT_COHERENT buffer D'),
+ ('            if (need_barrier) {\n                controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);','            if (need_barrier) {\n                ARGSORT_BARRIER();'),
+ ('        p.inner_end >= p.ncols_padded_log2 + 1) {\n        controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);','        p.inner_end >= p.ncols_padded_log2 + 1) {\n        ARGSORT_BARRIER();'),
+])
+patch(vk/'vulkan-shaders/vulkan-shaders-gen.cpp',[
+ ('    string_to_spv("argsort_large_f32", "argsort_large.comp", {{"A_TYPE", "float"}});\n',
+  '    string_to_spv("argsort_large_f32", "argsort_large.comp", {{"A_TYPE", "float"}});\n    string_to_spv("argsort_large_compat_f32", "argsort_large.comp", {{"A_TYPE", "float"}, {"ARGSORT_COMPAT", "1"}}); // voicekit: Dozen\n'),
+])
+patch(vk/'ggml-vulkan.cpp',[
+ ('"argsort_large_f32_"+std::to_string(i), argsort_large_f32_len, argsort_large_f32_data,',
+  '"argsort_large_f32_"+std::to_string(i), /* voicekit: Dozen */ device->driver_id == vk::DriverId::eMesaDozen ? argsort_large_compat_f32_len : argsort_large_f32_len, device->driver_id == vk::DriverId::eMesaDozen ? argsort_large_compat_f32_data : argsort_large_f32_data,'),
+])
 build=work/'build';darwin=platform.system()=='Darwin'
 # Windows: CMake's try-compile object paths under a deep checkout exceed the 250-character limit
 # (CMAKE_OBJECT_PATH_MAX), so build in a short per-checkout folder instead (or VOICEKIT_QWEN_BUILD_DIR).
