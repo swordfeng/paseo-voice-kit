@@ -86,7 +86,7 @@ pub fn hardware() -> &'static Hardware {
 }
 
 /// Load the backend modules that sit next to the executable. Returns the directory used.
-#[cfg(feature = "vulkan-dl")]
+#[cfg(any(feature = "vulkan-dl", feature = "cpu-dl"))]
 fn load_backends() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?.to_path_buf();
@@ -107,7 +107,7 @@ fn load_backends() -> Option<String> {
     None
 }
 
-#[cfg(not(feature = "vulkan-dl"))]
+#[cfg(not(any(feature = "vulkan-dl", feature = "cpu-dl")))]
 fn load_backends() -> Option<String> {
     // Statically linked backends register themselves.
     None

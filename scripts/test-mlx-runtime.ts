@@ -8,7 +8,7 @@ const options = { binary: () => "/bundle/voicekit", supported: () => true,
 };
 const monitor = new MlxRuntimeMonitor(options);
 assert.equal((await monitor.status()).phase, "ready");
-assert.equal((await monitor.status()).worker, "/bundle/mlx-runtime/voicekit-mlx-worker");
+assert.equal((await monitor.status()).worker?.replace(/\\/g, "/"), "/bundle/mlx-runtime/voicekit-mlx-worker");
 assert.ok(checks > 0);
 assert.equal((await new MlxRuntimeMonitor({ ...options, binary: () => null }).status()).reason, "runtimeRequired");
 checks = 0;

@@ -10,7 +10,7 @@
 //   4. The agent is deleted.
 //
 // Usage (from the repo root): node scripts/e2e-voice.mjs [out.wav]
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,8 +39,12 @@ function wav(pcm, rate) {
   return Buffer.concat([h, pcm]);
 }
 
-const withTimeout = (p, ms, what) =>
-  Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out: ${what}`)), ms))]);
+// The timer is cleared when `p` settles, so a finished run exits at once.
+const withTimeout = (p, ms, what) => {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out: ${what}`)), ms); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+};
 
 // 1. The spoken request, in an English voice.
 const request = await fetch(`${vk}/v1/audio/speech`, {
@@ -60,7 +64,8 @@ const client = createHostClient(process.env.PASEO_HOST ?? "127.0.0.1:6767", {
 await client.connect();
 await client.fetchAgents({ subscribe: {} });
 
-const cwd = mkdtempSync(join(tmpdir(), "voicekit-e2e-"));
+// The real path: Windows temp paths can be 8.3 short names that Paseo records in long form.
+const cwd = realpathSync.native(mkdtempSync(join(tmpdir(), "voicekit-e2e-")));
 let agentId = null;
 const t0 = Date.now();
 try {
@@ -132,7 +137,11 @@ try {
     const list = JSON.parse(paseo(["workspace", "ls", "--json"], { encoding: "utf8" }));
     for (const ws of Array.isArray(list) ? list : []) {
       const id = ws.id ?? ws.workspaceId;
-      if (id && JSON.stringify(ws).includes(cwd)) paseo(["workspace", "archive", id], { stdio: "ignore" });
+      // Compare paths themselves: JSON escapes Windows backslashes, and Windows paths can differ
+      // in case. Paths of the workspace and of its projects are both checked.
+      const norm = (p) => (typeof p === "string" ? p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() : null);
+      const paths = [ws.cwd, ws.path, ws.directory, ...(Array.isArray(ws.projects) ? ws.projects.flatMap((pr) => [pr?.cwd, pr?.path]) : [])].map(norm);
+      if (id && paths.includes(norm(cwd))) paseo(["workspace", "archive", id], { stdio: "ignore" });
     }
   } catch (e) {
     console.error(`could not archive the e2e workspace for ${cwd}: ${e.message}`);
