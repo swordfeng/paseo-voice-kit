@@ -9,6 +9,9 @@ name: release
 on:
   push:
     tags: ["v*"]
+    # Runs on main keep its caches warm: pull requests can only restore caches from their own
+    # branch or the default branch.
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -20,6 +23,11 @@ on:
 
 permissions:
   contents: read
+
+# A new push to a pull request replaces its running checks. Tags and main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Vulkan build inputs. Linux: headers, loader (link stub for the Vulkan module) and glslc from
@@ -34,43 +42,61 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      pull-requests: read
+      actions: read
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
-      native: ${{ steps.changes.outputs.native }}
+      native: ${{ steps.select.outputs.native }}
+      inputs: ${{ steps.inputs.outputs.hash }}
     steps:
       - uses: actions/checkout@v4
-      # A pull request that only changes docs or the plugin's own UI needs no native build; the
-      # plugin job still checks it. Tags, manual runs and anything else build every platform.
-      - id: changes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+      # Every file the native builds and their checks read, by Git object ID: the same on every
+      # platform and branch for the same content (unlike hashFiles, which sees CRLF on Windows).
+      # Docs, plugin/client, plugin/assets and the plugin-only test scripts aren't inputs.
+      - id: inputs
         run: |
-          native=true
-          if [ -n "$PR" ]; then
-            native=false
-            while IFS= read -r file; do
-              case "$file" in
-                docs/*|README.md|LICENSE|plugin/client/*|plugin/assets/*|plugin/OVERVIEW*.md|plugin/MODEL_LICENSES.md) ;;
-                *) native=true; echo "native change: $file" ;;
-              esac
-            done < <(gh api --paginate "repos/${{ github.repository }}/pulls/$PR/files" --jq '.[].filename')
-          fi
-          echo "native=$native" >> "$GITHUB_OUTPUT"
+          hash=$(git ls-tree -r HEAD -- server build licenses LICENSE plugin/licenses \
+            plugin/MODEL_LICENSES.md plugin/server plugin/shared plugin/package.json \
+            plugin/npm-shrinkwrap.json .github/workflows/release.yml \
+            scripts/build-mlx-worker.py scripts/build-qwen-worker.py scripts/collect-licenses.py \
+            scripts/fetch-build-input.py scripts/package-release.sh scripts/smoke-real-models.py \
+            scripts/test-sve-dots.py scripts/verify-native-package.mjs | sha256sum | cut -c1-40)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+      # A platform that already built and passed every check from these exact inputs is skipped,
+      # for pull requests anywhere and for main when the record is from main (so main's caches
+      # stay filled). Tags and manual runs build every selected platform.
       - id: select
         env:
           PLATFORM: ${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUTS: ${{ steps.inputs.outputs.hash }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import json, os
+          import json, os, subprocess
           platforms = json.load(open('build/platforms.json'))
           target = os.environ['PLATFORM']
           selected = [p for p in platforms if target == 'all' or p['key'] == target or target == 'linux' and p['key'].startswith('linux-')]
           if not selected:
               raise SystemExit('Unknown platform: ' + os.environ['PLATFORM'])
+          event, ref = os.environ['EVENT'], os.environ['REF']
+          reuse = event == 'pull_request' or (event == 'push' and ref == 'refs/heads/main')
+          def passed(key):
+              name = 'native-ok-' + key + '-' + os.environ['INPUTS']
+              out = subprocess.run(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/actions/caches?key=' + name],
+                                   capture_output=True, text=True)
+              if out.returncode:
+                  print('cache lookup failed, building:', out.stderr.strip())
+                  return False
+              refs = [c['ref'] for c in json.loads(out.stdout).get('actions_caches', []) if c['key'] == name]
+              return any(r == 'refs/heads/main' for r in refs) if event == 'push' else bool(refs)
+          build = [p for p in selected if not (reuse and passed(p['key']))]
+          for p in selected:
+              print(p['key'], 'build' if p in build else 'already passed with these inputs, skipped')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print('matrix=' + json.dumps({'include': selected}), file=output)
+              # An empty matrix is invalid even for a skipped job, so keep the full one then.
+              print('matrix=' + json.dumps({'include': build or selected}), file=output)
+              print('native=' + ('true' if build else 'false'), file=output)
           PY
 
   build:
@@ -402,6 +428,20 @@ jobs:
           name: voicekit-${{ matrix.key }}
           overwrite: true
           path: ${{ env.ASSET }}
+      # Records that this platform built and passed every check from these exact inputs; the
+      # platforms job skips it next time the inputs are the same. Tags don't record.
+      - name: Record a passing build
+        if: ${{ success() && !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          mkdir -p .ci-native-ok
+          echo "${{ github.run_id }} ${{ github.sha }}" > .ci-native-ok/run
+      - name: Save the passing-build record
+        if: ${{ success() && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-native-ok
+          key: native-ok-${{ matrix.key }}-${{ needs.platforms.outputs.inputs }}
 
   plugin:
     runs-on: ubuntu-22.04

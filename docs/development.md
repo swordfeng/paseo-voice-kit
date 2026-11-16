@@ -126,13 +126,23 @@ on the unpacked asset with `--accelerator cpu` (short real-model checks, see
 `scripts/test-sve-dots.py --require-sve`, which checks the packaged SVE dot-product kernels
 against exact scalar results.
 
-To keep pull requests quick, CI reuses work whose inputs haven't changed. The Qwen worker and
-the MLX helper are cached by a hash of their sources, build scripts, the workflow and the
-runner image (plus Xcode for MLX). The smoke test's model downloads are cached once for all
-platforms, keyed by `server/catalog.json`. Release tags never use these caches: everything
-they publish is built from source and tested against fresh downloads. A pull request that only
-changes `docs/`, the README, the plugin's overviews or model license list, `plugin/client/`
-or `plugin/assets/` skips the native builds; the plugin job still runs.
+CI doesn't redo work whose inputs haven't changed:
+
+- Before building, CI hashes every file the native builds and their checks read, by Git
+  object ID. A platform that already built and passed every check from the same inputs is
+  skipped. This covers a rerun, a pull request that only changes docs or `plugin/client/`, and
+  a merge whose native inputs were already tested. Each platform records its pass in a small
+  cache entry (`native-ok-<platform>-<hash>`).
+- When a platform does build, the Qwen worker and the MLX helper are restored from caches
+  keyed by their sources, build scripts, the workflow and the runner image (plus Xcode for
+  MLX). The smoke test's model downloads are cached once for all platforms, keyed by
+  `server/catalog.json`.
+- CI also runs on pushes to main. Pull requests can only restore caches from their own branch
+  or the default branch, so this keeps every pull request's caches warm. A new push to a pull
+  request cancels its running checks.
+
+Release tags use none of this: every platform is built from source and tested against fresh
+downloads.
 
 Tested beyond CI: Linux arm64 in Docker on Apple Silicon with the CI recipe (Ubuntu 22.04,
 clang 14), including real Whisper transcription with and without a Vulkan loader, and
