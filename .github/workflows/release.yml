@@ -132,7 +132,19 @@ jobs:
                   seen.add(line)
                   if os.path.isfile(line):
                       os.utime(line, (when, when))
-          print(len(seen), "paths dated from history")
+          # Directories too: Cargo counts them when a build script watches a folder (whisper-rs-sys
+          # watches whisper.cpp). Each gets the newest time inside it, bottom-up.
+          dirs = 0
+          for root, subdirs, files in os.walk("server", topdown=False):
+              rel = root.replace(os.sep, "/")
+              if rel == "server/target" or rel.startswith("server/target/"):
+                  continue
+              times = [os.stat(os.path.join(root, n)).st_mtime for n in files + subdirs
+                       if not os.path.islink(os.path.join(root, n))]
+              if times:
+                  os.utime(root, (max(times), max(times)))
+                  dirs += 1
+          print(len(seen), "files and", dirs, "directories dated from history")
           '
       - uses: actions/setup-node@v4
         with:
@@ -251,7 +263,8 @@ jobs:
         run: |
           # The OS, the C compiler's version line and the Vulkan pins, not the exact runner image:
           # images roll out gradually, so consecutive jobs can land on different ones.
-          compiler=$("${CC:-cc}" --version 2>&1 | head -1)
+          # MSVC's cl prints its banner but exits non-zero on --version.
+          compiler=$("${CC:-cc}" --version 2>&1 | head -1 || true)
           echo "compiler: $compiler"
           id=$(COMPILER="$compiler" python3 -c 'import hashlib, os; print(hashlib.sha256((os.environ["COMPILER"] + " " + os.environ["VULKAN_CONDA_PACKAGES"] + " " + os.environ["VULKAN_SDK_VERSION"]).encode()).hexdigest()[:16])')
           echo "version=${ImageOS:-unknown}-$id" >> "$GITHUB_OUTPUT"
