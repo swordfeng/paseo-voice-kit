@@ -1,4 +1,4 @@
-Voice Kit runs speech recognition and voices on the daemon machine and points Paseo's dictation and voice mode at them. Audio stays on that machine unless you add a remote speech server yourself.
+Voice Kit runs speech recognition and voices on the daemon machine and points Paseo's dictation and voice mode at them. What you say and the replies it reads aloud stay on that machine, unless you add a remote speech server yourself; that server then receives the audio or text it handles.
 
 ## How it works
 
