@@ -9,6 +9,8 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 REVISION = "209e1cb45498c5b7b4b96d417f9b15fe71d440f5"
+# Matches Package.swift (platforms: .macOS(.v14)).
+MACOS_MIN = "14.0"
 
 
 def run(command, deadline, cwd=ROOT):
@@ -46,17 +48,31 @@ def build(args):
     run(["swift", "build", "--package-path", str(ROOT), "--disable-automatic-resolution",
          "-c", "release", "--product", "voicekit-mlx-worker", "-j", str(args.jobs)], deadline)
     products = ROOT / ".build/release"
-    # SwiftPM compiles MLX's Metal kernels into the resource bundle. Where it puts the library
-    # inside the bundle has differed between toolchains, so look for it rather than assume.
-    bundle = products / "mlx-swift_Cmlx.bundle"
-    found = sorted(bundle.rglob("default.metallib")) if bundle.exists() else []
-    if not found:
-        listing = sorted(str(p.relative_to(products)) for p in bundle.rglob("*")) if bundle.exists() else ["(no bundle)"]
-        others = sorted(str(p.relative_to(ROOT)) for p in (ROOT / ".build").rglob("*.metallib"))
-        raise RuntimeError("MLX Metal library missing. Bundle: " + ", ".join(listing[:40])
-                           + ". Other metallibs: " + (", ".join(others) or "none"))
-    shutil.copy2(found[0], products / "mlx.metallib")
+    compile_metallib(products / "mlx.metallib", deadline)
 
+
+def compile_metallib(out, deadline):
+    """MLX's precompiled Metal kernels, built the way MLX's own CMake builds them.
+
+    `swift build` doesn't compile Metal shaders (mlx-swift's README; Xcode 27's SwiftPM happens
+    to, Xcode 26's doesn't), so the library is built here on every toolchain. The rest of MLX's
+    kernels are compiled at run time."""
+    source = ROOT / ".build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+    kernels = sorted(source.rglob("*.metal"))
+    if not kernels:
+        raise RuntimeError("no MLX Metal kernels under " + str(source))
+    air = ROOT / ".build/voicekit-metal"
+    shutil.rmtree(air, ignore_errors=True)
+    air.mkdir(parents=True)
+    flags = ["-x", "metal", "-Wall", "-Wextra", "-fno-fast-math", "-Wno-c++17-extensions",
+             "-Wno-c++20-extensions", "-Wmetal-addr-spaces", "-mmacosx-version-min=" + MACOS_MIN]
+    objects = []
+    for kernel in kernels:
+        target = air / (kernel.relative_to(source).as_posix().replace("/", "_")[:-len(".metal")] + ".air")
+        run(["xcrun", "-sdk", "macosx", "metal", *flags, "-c", str(kernel), "-I" + str(source), "-o", str(target)],
+            deadline)
+        objects.append(str(target))
+    run(["xcrun", "-sdk", "macosx", "metal", *objects, "-o", str(out)], deadline)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
