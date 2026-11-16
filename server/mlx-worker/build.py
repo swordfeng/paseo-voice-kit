@@ -46,7 +46,16 @@ def build(args):
     run(["swift", "build", "--package-path", str(ROOT), "--disable-automatic-resolution",
          "-c", "release", "--product", "voicekit-mlx-worker", "-j", str(args.jobs)], deadline)
     products = ROOT / ".build/release"
-    shutil.copy2(products / "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib", products / "mlx.metallib")
+    # SwiftPM compiles MLX's Metal kernels into the resource bundle. Where it puts the library
+    # inside the bundle has differed between toolchains, so look for it rather than assume.
+    bundle = products / "mlx-swift_Cmlx.bundle"
+    found = sorted(bundle.rglob("default.metallib")) if bundle.exists() else []
+    if not found:
+        listing = sorted(str(p.relative_to(products)) for p in bundle.rglob("*")) if bundle.exists() else ["(no bundle)"]
+        others = sorted(str(p.relative_to(ROOT)) for p in (ROOT / ".build").rglob("*.metallib"))
+        raise RuntimeError("MLX Metal library missing. Bundle: " + ", ".join(listing[:40])
+                           + ". Other metallibs: " + (", ".join(others) or "none"))
+    shutil.copy2(found[0], products / "mlx.metallib")
 
 
 if __name__ == "__main__":
