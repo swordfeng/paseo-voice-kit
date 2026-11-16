@@ -284,6 +284,7 @@ export const ru: Messages = {
     down: "Ниже",
     paused: "Приостановлено из-за ошибки. Повтор через {{seconds}} с.",
     unavailableHere: "Недоступно на этом компьютере.",
+    gpuFallback: "Работает на CPU: GPU не смог запустить эту модель. После перезапуска Voice Kit снова попробует GPU.",
     coverage: "Языки",
     coverageSummary: "Языков с родной поддержкой: {{n}}.",
     firstChoice: "Первый выбор: {{language}}",

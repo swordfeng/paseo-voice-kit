@@ -284,6 +284,7 @@ export const ar: Messages = {
     down: "نقل لأسفل",
     paused: "متوقف مؤقتًا بعد خطأ. ستُعاد المحاولة خلال {{seconds}} ث.",
     unavailableHere: "غير متاح على هذا الكمبيوتر.",
+    gpuFallback: "يعمل على المعالج: تعذّر على GPU تشغيل هذا النموذج. سيحاول Voice Kit استخدام GPU مجددًا بعد إعادة تشغيله.",
     coverage: "اللغات",
     coverageSummary: "عدد اللغات المدعومة أصلًا في نماذجك المحدّدة: {{n}}.",
     firstChoice: "الخيار الأول للغة: {{language}}",

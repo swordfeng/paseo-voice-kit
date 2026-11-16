@@ -327,6 +327,17 @@ function VoiceModels(props: ModelManagerProps & { customById: Map<string, Custom
     );
   };
 
+  // The model runs, just more slowly: its GPU worker failed, so it moved to the CPU.
+  const gpuFallback = (id: string) => {
+    const reason = routeOf(id)?.gpuFallback;
+    if (!reason) return null;
+    return (
+      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
+        {t("voiceModels.gpuFallback") + " " + reason}
+      </Text>
+    );
+  };
+
   const cov = coverage(enabled, values, approximateNow);
   const others = recommendedFirst(voiceModels.filter((m) => !chain.includes(m.id) && m.tier !== "custom"));
   const yours = voiceModels.filter((m) => !chain.includes(m.id) && m.tier === "custom");
@@ -373,6 +384,7 @@ function VoiceModels(props: ModelManagerProps & { customById: Map<string, Custom
           extra={
             <>
               {paused(m.id)}
+              {gpuFallback(m.id)}
               <CardVoice {...props} model={m} route={routeOf(m.id)} custom={customById.get(m.id)} />
             </>
           }

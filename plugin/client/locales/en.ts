@@ -286,6 +286,7 @@ export const en = {
     down: "Move down",
     paused: "Paused after an error. Trying again in {{seconds}} s.",
     unavailableHere: "Not available on this computer.",
+    gpuFallback: "Running on the CPU: the GPU couldn't run this model. Voice Kit tries the GPU again after it restarts.",
     coverage: "Languages",
     coverageSummary: "Your selected models speak {{n}} languages natively.",
     firstChoice: "First choice for {{language}}",

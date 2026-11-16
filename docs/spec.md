@@ -354,6 +354,17 @@ speaking.
   another fixed seed at the same temperature. Windows Vulkan 0.6B Q4 also bypasses MMVQ
   (`8462720`); that workaround's root cause is unknown and covers Windows only. Linux Vulkan
   and AMD/Intel GPUs are unchecked. `N:engine::qwen` `M` (Decided 2026-11-15.)
+- WRK-5b A GGUF worker on a GPU that crashes, or that fails to start, is replaced by one on
+  the CPU, and the same request is read again there. The model stays on the CPU until the
+  server restarts, including after an idle unload. Its card says it runs on the CPU because
+  the GPU couldn't run it, with the error (`gpuFallback` on the voice-list route). A fallback
+  that answers is not a failure and starts no cooldown. Timeouts and worker-reported errors
+  don't fall back. A crash reads "GGUF speech worker stopped unexpectedly", with the exit
+  status. `N:engine::gguf` (Decided 2026-11-15, S25.)
+- WRK-5c WSL's Dozen driver (Vulkan on D3D12) can't create ggml's `argsort_large` pipelines.
+  The worker build treats Dozen as lacking the Vulkan memory model, so Qwen's 2048-entry
+  sampling sort runs on the CPU and everything else stays on the GPU.
+  (`scripts/build-qwen-worker.py`.) `M`
 - WRK-6 No released build used a Python MLX runtime, so Voice Kit neither looks for nor
   migrates one. The only one, on the development Mac, was moved to the Trash on 2026-11-15.
   (Decided, Q9.)
@@ -521,7 +532,7 @@ disconnects, S21 outside the measured models, and E1 (Paseo). **P** is the plugi
 | S22 | Sherpa file detection prefers `model.int8.onnx` without checking that it is a real model, so it can pick a Git LFS pointer (CUS-1b). **Fixed:** files under 1 KB are never picked as a model. | Medium |
 | S23 | Kokoro English-only, Piper and Matcha models are accepted, then fail or drop text because they need a phonemizer. The docs mention only Piper. The add form also lacks Moonshine and Omnilingual (CUS-1a). **Fixed:** phonemizer models (Kokoro without a lexicon, Piper) and Matcha are refused at Hugging Face lookup and at load, with the reason; the add form offers Moonshine and Omnilingual. | Medium |
 | S24 | A Linux build with no Cargo features (sherpa-onnx, ONNX Runtime and whisper.cpp all static) aborts with `free(): invalid pointer` at the first model load, inside ONNX Runtime's `std::regex`. Reproduced on WSL at `c0d8cb5`, before this branch. Release builds use `vulkan-dl` and aren't affected. **Mitigated:** the new `cpu-dl` feature builds CPU-only in the release layout (runtime-loaded ggml modules, `$ORIGIN` runpath), and the README and development.md point to it. Verified on WSL at `ee1714f`: 72 Rust tests and Whisper, Qwen3-ASR and Supertonic 3 read real models on the CPU. | Medium |
-| S25 | When the GPU can't run the Qwen worker (seen with WSL's Dozen driver: a compute pipeline fails and the worker aborts), every attempt crashes again after its cooldown, with no fallback to the CPU, and the error reads "failed to fill whole buffer" instead of saying the worker stopped. | Medium |
+| S25 | When the GPU can't run the Qwen worker (seen with WSL's Dozen driver: a compute pipeline fails and the worker aborts), every attempt crashes again after its cooldown, with no fallback to the CPU, and the error reads "failed to fill whole buffer" instead of saying the worker stopped. **Fixed (2026-11-15):** a GPU worker that crashes or fails to start falls back to the CPU for the request and for the rest of the server's run, shown on the card; a crash is reported as such (WRK-5b). The Dozen cause itself is worked around in the worker build (WRK-5c). | Medium |
 | E1 | External (Paseo): voice-mode recordings can accumulate long silences and earlier speech between turns (STT-5b). Voice detection also sometimes stopped responding until voice mode was stopped and restarted, and the layer at fault is unknown. | Medium |
 
 ## Later work

@@ -283,6 +283,7 @@ export const ptBR: Messages = {
     down: "Descer",
     paused: "Pausado após um erro. Nova tentativa em {{seconds}} s.",
     unavailableHere: "Indisponível neste computador.",
+    gpuFallback: "Rodando na CPU: a GPU não conseguiu executar este modelo. O Voice Kit tenta a GPU de novo quando reinicia.",
     coverage: "Idiomas",
     coverageSummary: "Seus modelos selecionados falam {{n}} idiomas nativamente.",
     firstChoice: "Primeira opção para {{language}}",

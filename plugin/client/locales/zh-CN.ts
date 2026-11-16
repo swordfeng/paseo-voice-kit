@@ -283,6 +283,7 @@ export const zhCN: Messages = {
     down: "下移",
     paused: "出错后已暂停，{{seconds}} 秒后重试。",
     unavailableHere: "在这台电脑上不可用。",
+    gpuFallback: "正在用 CPU 运行：GPU 无法运行此模型。Voice Kit 重启后会再试 GPU。",
     coverage: "语言",
     coverageSummary: "已选模型原生支持 {{n}} 种语言。",
     firstChoice: "{{language}}的首选",

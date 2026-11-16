@@ -295,6 +295,8 @@ export const RouteVoicesSchema = z.object({
   error: z.string().nullable().optional(),
   /** Seconds until a failed model is tried again. */
   retryAfterSeconds: z.number().nullable().optional(),
+  /** Set when this model's GPU worker failed and it now runs on the CPU: that error. */
+  gpuFallback: z.string().nullable().optional(),
 });
 export type RouteVoices = z.infer<typeof RouteVoicesSchema>;
 

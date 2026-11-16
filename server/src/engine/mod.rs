@@ -131,6 +131,8 @@ pub trait TtsEngine: Send + Sync {
     /// Chain children have independent idle clocks even while other routes remain active.
     fn unload_idle(&self, _after: std::time::Duration) {}
     fn failure(&self) -> Option<String> { None }
+    /// Why this model runs on the CPU although the GPU was allowed (its GPU worker failed).
+    fn gpu_fallback(&self) -> Option<String> { None }
     fn retry_failed(&self) {}
     fn model_downloaded(&self, _id: &str) {}
     fn last_error(&self) -> Option<serde_json::Value> { None }

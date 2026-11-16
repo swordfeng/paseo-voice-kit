@@ -283,6 +283,7 @@ export const es: Messages = {
     down: "Bajar",
     paused: "En pausa por un error. Se reintentará en {{seconds}} s.",
     unavailableHere: "No disponible en este equipo.",
+    gpuFallback: "Funciona en la CPU: la GPU no pudo ejecutar este modelo. Voice Kit vuelve a probar la GPU cuando se reinicia.",
     coverage: "Idiomas",
     coverageSummary: "Tus modelos seleccionados hablan {{n}} idiomas de forma nativa.",
     firstChoice: "Primera opción para {{language}}",

@@ -283,6 +283,7 @@ export const ja: Messages = {
     down: "下へ",
     paused: "エラーのため一時停止中です。{{seconds}} 秒後に再試行します。",
     unavailableHere: "このコンピューターでは使えません。",
+    gpuFallback: "CPU で動作中です。GPU でこのモデルを実行できませんでした。Voice Kit の再起動後に GPU をもう一度試します。",
     coverage: "言語",
     coverageSummary: "選択したモデルは {{n}} 言語にネイティブ対応しています。",
     firstChoice: "{{language}}の第一候補",

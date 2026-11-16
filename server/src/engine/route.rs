@@ -154,6 +154,10 @@ pub struct RouteVoices {
     #[serde(rename = "retryAfterSeconds")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after_seconds: Option<u64>,
+    /// Set when the model fell back to the CPU after its GPU worker failed: that error.
+    #[serde(rename = "gpuFallback")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_fallback: Option<String>,
 }
 
 

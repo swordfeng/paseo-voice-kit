@@ -551,6 +551,7 @@ impl TtsEngine for ChainTts {
                     available: Some(r.installed() && unrunnable.is_none() && retry.is_none()),
                     error: unrunnable.or_else(|| retry.map(|_| "Voice model is cooling down after a failure".into())),
                     retry_after_seconds: retry,
+                    gpu_fallback: loaded.as_ref().and_then(|e| e.gpu_fallback()),
                 }
             })
             .collect()

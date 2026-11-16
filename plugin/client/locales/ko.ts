@@ -283,6 +283,7 @@ export const ko: Messages = {
     down: "아래로",
     paused: "오류로 일시 중지됨. {{seconds}}초 후 다시 시도합니다.",
     unavailableHere: "이 컴퓨터에서는 사용할 수 없습니다.",
+    gpuFallback: "CPU에서 실행 중입니다. GPU에서 이 모델을 실행할 수 없었습니다. Voice Kit을 다시 시작하면 GPU를 다시 시도합니다.",
     coverage: "언어",
     coverageSummary: "선택한 모델이 {{n}}개 언어를 기본 지원합니다.",
     firstChoice: "{{language}} 우선 모델",
