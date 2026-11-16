@@ -112,6 +112,28 @@ jobs:
       GGML_NATIVE: "OFF"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, for the file times below.
+          fetch-depth: 0
+      # Cargo decides whether path crates (voicekit and the vendored whisper-rs-sys) are up to
+      # date from file times, and a checkout makes every file new. Set each file under server/
+      # to the time of the last commit that changed it, so files that didn't change match the
+      # cached build and whisper.cpp isn't rebuilt.
+      - name: Restore file times from Git history
+        shell: bash
+        run: |
+          git log --format='format:%x00%ct' --name-only -- server | python3 -c '
+          import os, sys
+          seen, when = set(), 0
+          for line in sys.stdin.read().split("\n"):
+              if line.startswith("\0"):
+                  when = int(line[1:])
+              elif line and line not in seen:
+                  seen.add(line)
+                  if os.path.isfile(line):
+                      os.utime(line, (when, when))
+          print(len(seen), "paths dated from history")
+          '
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -140,7 +162,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-          key: ${{ matrix.features }}-${{ hashFiles('build/native-inputs.json') }}
+          # Keep the workspace members' builds too: whisper-rs-sys (whisper.cpp and its Vulkan
+          # shaders) takes minutes to build. "ws" changes the key so such a cache gets saved.
+          key: ${{ matrix.features }}-ws-${{ hashFiles('build/native-inputs.json') }}
+          cache-workspace-crates: true
           cache-on-failure: true
       - name: Discard incompatible Visual Studio CMake cache
         if: runner.os == 'Windows'
