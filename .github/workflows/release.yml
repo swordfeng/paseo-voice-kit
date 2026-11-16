@@ -304,26 +304,36 @@ jobs:
         shell: bash
         run: python3 scripts/test-sve-dots.py "$(dirname "$EXE")" --require-sve
       # The smoke test's models are the same on every platform, so one cache serves all five. The
-      # larger Qwen model (only Windows and Linux x64 test it) has its own entry. Keyed by the
-      # catalog, which pins every file's checksum. Release tags download fresh.
+      # larger Qwen model (only Windows and Linux x64 test it) is cached on its own, from a
+      # separate folder. Keyed by the catalog, which pins every file's checksum, using Git's
+      # object ID: hashFiles would differ on Windows, which checks text out with CRLF.
+      # Release tags download fresh.
+      - name: Model cache key
+        id: models-key
+        shell: bash
+        run: echo "catalog=$(git rev-parse HEAD:server/catalog.json)" >> "$GITHUB_OUTPUT"
       - name: Restore real-model downloads
         id: models-cache
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .ci-models
-            !.ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
-          key: real-models-${{ hashFiles('server/catalog.json') }}
+          path: .ci-models
+          key: real-models-${{ steps.models-key.outputs.catalog }}
           enableCrossOsArchive: true
       - name: Restore the larger Qwen model
         id: large-model-cache
         if: ${{ !startsWith(github.ref, 'refs/tags/') && (matrix.key == 'win32-x64' || matrix.key == 'linux-x64') }}
         uses: actions/cache/restore@v4
         with:
-          path: .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
-          key: real-models-large-${{ hashFiles('server/catalog.json') }}
+          path: .ci-large-model
+          key: real-models-large-${{ steps.models-key.outputs.catalog }}
           enableCrossOsArchive: true
+      - name: Put the larger Qwen model in place
+        if: steps.large-model-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          mkdir -p .ci-models
+          mv .ci-large-model/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 .ci-models/
       - name: Real model CPU inference and round trips
         id: real-models
         timeout-minutes: 12
@@ -356,21 +366,27 @@ jobs:
             --models-dir "$GITHUB_WORKSPACE/.ci-models" \
             --output "$RUNNER_TEMP/real-model-report/baseline" \
             --accelerator cpu --timeout 540
+      - name: Set the larger Qwen model aside for its own cache
+        if: ${{ success() && steps.large-model-cache.outcome == 'success' }}
+        shell: bash
+        run: |
+          mkdir -p .ci-large-model
+          if [ -d .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 ]; then
+            mv .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8 .ci-large-model/
+          fi
       - name: Save real-model downloads
         if: ${{ success() && steps.models-cache.outcome == 'success' && steps.models-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: |
-            .ci-models
-            !.ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
-          key: real-models-${{ hashFiles('server/catalog.json') }}
+          path: .ci-models
+          key: real-models-${{ steps.models-key.outputs.catalog }}
           enableCrossOsArchive: true
       - name: Save the larger Qwen model
         if: ${{ success() && steps.large-model-cache.outcome == 'success' && steps.large-model-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: .ci-models/Qwen3-TTS-1.7B-CustomVoice-GGUF-Q8
-          key: real-models-large-${{ hashFiles('server/catalog.json') }}
+          path: .ci-large-model
+          key: real-models-large-${{ steps.models-key.outputs.catalog }}
           enableCrossOsArchive: true
       - name: Preserve real model diagnostics
         if: always()
