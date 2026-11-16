@@ -9,9 +9,11 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(join(process.cwd(), "plugin", "package.json"));
-const { createHostClient } = await import(require.resolve("@getpaseo/client/node"));
+// A file URL, not a path: Windows paths ("C:\\...") are not valid ESM specifiers.
+const { createHostClient } = await import(pathToFileURL(require.resolve("@getpaseo/client/node")).href);
 
 const args = process.argv.slice(2);
 const saveIdx = args.indexOf("--save-audio");

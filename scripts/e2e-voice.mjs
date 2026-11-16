@@ -72,7 +72,9 @@ try {
   const agent = await client.createAgent({
     // E2E_PROVIDER / E2E_MODEL pick another agent (for example codex) where Claude isn't signed in.
     config: process.env.E2E_PROVIDER
-      ? { provider: process.env.E2E_PROVIDER, cwd, ...(process.env.E2E_MODE ? { modeId: process.env.E2E_MODE } : {}), ...(process.env.E2E_MODEL ? { model: process.env.E2E_MODEL } : {}) }
+      // The throwaway agent must call `speak` without an approval nobody answers: Codex's
+      // default mode asks before MCP tools, so it runs in full access, as Claude bypasses.
+      ? { provider: process.env.E2E_PROVIDER, cwd, modeId: process.env.E2E_MODE ?? (process.env.E2E_PROVIDER === "codex" ? "full-access" : undefined), ...(process.env.E2E_MODEL ? { model: process.env.E2E_MODEL } : {}) }
       : { provider: "claude", cwd, modeId: "bypassPermissions", model: process.env.E2E_MODEL ?? "claude-haiku-5-5" },
   });
   agentId = agent.id;
@@ -133,7 +135,11 @@ try {
     const { execFileSync } = await import("node:child_process");
     // Windows installs the CLI as paseo.cmd, which only runs through a shell.
     const windows = process.platform === "win32";
-    const paseo = (args, options) => execFileSync(windows ? "paseo.cmd" : "paseo", args, { ...options, shell: windows });
+    // The CLI refuses PASEO_HOME and PASEO_HOST together; with a home set (an isolated
+    // daemon), the home is the target.
+    const env = { ...process.env };
+    if (env.PASEO_HOME && env.PASEO_HOST) delete env.PASEO_HOST;
+    const paseo = (args, options) => execFileSync(windows ? "paseo.cmd" : "paseo", args, { ...options, env, shell: windows });
     const list = JSON.parse(paseo(["workspace", "ls", "--json"], { encoding: "utf8" }));
     for (const ws of Array.isArray(list) ? list : []) {
       const id = ws.id ?? ws.workspaceId;
