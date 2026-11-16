@@ -331,10 +331,12 @@ function VoiceModels(props: ModelManagerProps & { customById: Map<string, Custom
   const gpuFallback = (id: string) => {
     const reason = routeOf(id)?.gpuFallback;
     if (!reason) return null;
+    // The server's error is untranslated detail, so it gets its own smaller line.
     return (
-      <Text selectable style={{ color: c.foregroundMuted, fontSize: 12 }}>
-        {t("voiceModels.gpuFallback") + " " + reason}
-      </Text>
+      <View style={{ gap: 2 }}>
+        <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{t("voiceModels.gpuFallback")}</Text>
+        <Text selectable style={{ color: c.foregroundMuted, fontSize: 11, opacity: 0.8 }}>{reason}</Text>
+      </View>
     );
   };
 
