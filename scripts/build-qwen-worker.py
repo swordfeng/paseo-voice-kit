@@ -27,6 +27,17 @@ shutil.copy2(adapter,sources/'qwentts/src/voicekit-token-count.inc')
 source=sources/'qwentts/src/qwen.cpp'
 include='\n#include "voicekit-token-count.inc"\n'
 if include not in source.read_text():source.write_text(source.read_text()+include)
+# WSL's Dozen driver (Vulkan on D3D12) advertises the Vulkan memory model but can't create the
+# argsort_large pipelines that rely on it, so the worker aborted on its first request. Treating
+# Dozen as lacking the memory model makes ggml report sorts wider than one workgroup (Qwen's
+# 2048-entry sampling sort) as unsupported, and the scheduler runs them on the CPU instead.
+vulkan=sources/'ggml/src/ggml-vulkan/ggml-vulkan.cpp'
+old='device->vulkan_memory_model = vk12_features.vulkanMemoryModel;'
+new='device->vulkan_memory_model = vk12_features.vulkanMemoryModel && device->driver_id != vk::DriverId::eMesaDozen; // voicekit: Dozen'
+text=vulkan.read_text(encoding='utf8')
+if new not in text:
+ if text.count(old)!=1:raise RuntimeError('ggml-vulkan memory model line not found; update the Dozen patch')
+ vulkan.write_text(text.replace(old,new),encoding='utf8')
 build=work/'build';darwin=platform.system()=='Darwin'
 # Windows: CMake's try-compile object paths under a deep checkout exceed the 250-character limit
 # (CMAKE_OBJECT_PATH_MAX), so build in a short per-checkout folder instead (or VOICEKIT_QWEN_BUILD_DIR).
