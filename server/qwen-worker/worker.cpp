@@ -44,7 +44,7 @@ static std::string string_value(yyjson_val *root, const char *key, const char *f
 static bool expired(void *p) {
     return std::chrono::steady_clock::now() >= *static_cast<std::chrono::steady_clock::time_point *>(p);
 }
-#ifdef _WIN32
+#ifndef __APPLE__
 static bool needs_vulkan_mmvq_workaround(const char *path) {
     // Read metadata only. Match model content, never a user-controlled filename.
     gguf_context *meta = gguf_init_from_file(path, {true, nullptr});
@@ -70,15 +70,21 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (argc != 4) return 2;
-#ifdef _WIN32
+#ifndef __APPLE__
     // The pinned Vulkan MMVQ path makes the 1024-wide Q4 model exhaust its
-    // token limit on Windows/RTX 5090. Bypass activation-vector quantization
-    // only in this worker; keep Vulkan, FA, and the 1.7B Q8 path unchanged.
+    // token limit on the RTX 5090, both on Windows and on Linux (WSL's Dozen
+    // driver). Bypass activation-vector quantization only in this worker;
+    // keep Vulkan, FA, and the 1.7B Q8 path unchanged. (macOS uses Metal.)
     if (std::string(argv[3]) != "cpu" && needs_vulkan_mmvq_workaround(argv[1])) {
         if (std::getenv("GGML_VK_DISABLE_MMVQ") || std::getenv("GGML_VK_FORCE_MMVQ")) {
             std::fprintf(stderr, "[qwen] preserving explicit Vulkan MMVQ environment override\n");
         } else {
-            if (_putenv_s("GGML_VK_DISABLE_MMVQ", "1") != 0) {
+#ifdef _WIN32
+            const bool set = _putenv_s("GGML_VK_DISABLE_MMVQ", "1") == 0;
+#else
+            const bool set = setenv("GGML_VK_DISABLE_MMVQ", "1", 1) == 0;
+#endif
+            if (!set) {
                 error("Could not configure Vulkan speech precision"); return 1;
             }
             std::fprintf(stderr, "[qwen] Vulkan MMVQ disabled for 1024-wide Q4 talker (worker only)\n");

@@ -29,12 +29,20 @@ taps do not inspect the code predictor's direct graph. The MMVQ path converts
 F32 activation vectors to Q8_1; disabling it retains float-vector matvec on
 Vulkan. Flash attention remains enabled.
 
-The compatibility workaround is confined to Windows Qwen workers requesting a
-GPU, when talker GGUF metadata identifies a 1024-wide Qwen3-TTS model containing
+The compatibility workaround applies to Qwen workers requesting a GPU on
+Windows and Linux (Vulkan; macOS uses Metal), when talker GGUF metadata identifies a 1024-wide Qwen3-TTS model containing
 Q4_K tensors. It is set before backend initialization and does not use filename
 matching. Explicit disable/force environment variables are preserved using
 ggml's presence-based semantics. The current 1.7B Q8 model is not matched.
 This is a bounded workaround verified on this host, not a general kernel fix.
+
+The same RTX 5090 under WSL (Fedora 45, Mesa 26.2.6 Dozen, `c4122de`) shows
+the same fault: with MMVQ on, a short Chinese and a short English sentence ran
+to their frame caps on seeds 42 and 7; with `GGML_VK_DISABLE_MMVQ=1` both ended
+normally (zh 90,240 samples in 21.8 s including the first load, en 82,560
+samples in 2.4 s) and Whisper read them back exactly. ggml's
+`test-backend-ops` on Dozen: ARGSORT 46 pass, 0 fail (ne0 = 2048 is reported
+unsupported, so not run there); TOP_K 533 pass, 0 fail.
 
 The final native regression (`scripts/smoke-real-models.py --accelerator auto
 --expect-gpu --large-qwen --no-downloads`, with explicit model/output paths)

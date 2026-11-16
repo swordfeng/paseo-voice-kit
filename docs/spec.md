@@ -351,9 +351,10 @@ speaking.
   both backends (0.2 often never reached the end token; eval.md). Each chunk's frame cap
   follows its token count (0.8 s per token plus 4 s, at most 1200 frames), so a generation
   that doesn't end fails within seconds with `token_limit`. It is then retried once with
-  another fixed seed at the same temperature. Windows Vulkan 0.6B Q4 also bypasses MMVQ
-  (`8462720`); that workaround's root cause is unknown and covers Windows only. Linux Vulkan
-  and AMD/Intel GPUs are unchecked. `N:engine::qwen` `M` (Decided 2026-11-15.)
+  another fixed seed at the same temperature. On Vulkan (Windows and Linux) 0.6B Q4 also
+  bypasses MMVQ (`8462720`): on the RTX 5090 its generation never ended on either system
+  without it. The root cause is unknown; native Linux drivers and AMD/Intel GPUs are
+  unchecked. `N:engine::qwen` `M` (Decided 2026-11-15.)
 - WRK-5b A GGUF worker on a GPU that crashes, or that fails to start, is replaced by one on
   the CPU, and the same request is read again there. The model stays on the CPU until the
   server restarts, including after an idle unload. Its card says it runs on the CPU because
@@ -361,10 +362,12 @@ speaking.
   that answers is not a failure and starts no cooldown. Timeouts and worker-reported errors
   don't fall back. A crash reads "GGUF speech worker stopped unexpectedly", with the exit
   status. `N:engine::gguf` (Decided 2026-11-15, S25.)
-- WRK-5c WSL's Dozen driver (Vulkan on D3D12) can't create ggml's `argsort_large` pipelines.
-  The worker build treats Dozen as lacking the Vulkan memory model, so Qwen's 2048-entry
-  sampling sort runs on the CPU and everything else stays on the GPU.
-  (`scripts/build-qwen-worker.py`.) `M`
+- WRK-5c WSL's Dozen driver (Vulkan on D3D12) has no Vulkan memory model, which ggml's
+  `argsort_large` shader requires, so the worker aborted creating it. Qwen needs it to sort
+  its 2048-entry sampling logits in a graph run directly on the GPU, where ggml doesn't check
+  what the device supports. The worker build adds a variant with plain coherent buffers and
+  barriers and uses it on Dozen only (`scripts/build-qwen-worker.py`); every other driver
+  keeps the upstream shader. `M`
 - WRK-6 No released build used a Python MLX runtime, so Voice Kit neither looks for nor
   migrates one. The only one, on the development Mac, was moved to the Trash on 2026-11-15.
   (Decided, Q9.)
@@ -583,7 +586,7 @@ step, and confirm GPU use wherever acceleration is expected.
     - on Vulkan, Whisper and both Qwen3-TTS models (0.6B Q4 and 1.7B Q8): Chinese and
       English, generation ending normally, the content read back by speech recognition,
       and the native log showing the Vulkan device. Windows was checked on 2026-11-14 with
-      the MMVQ workaround; Linux Vulkan has not been checked (WRK-5a);
+      the MMVQ workaround; Linux Vulkan on WSL's Dozen driver on 2026-11-15 (WRK-5a, WRK-5c);
     - on Windows, a leftover server is stopped (P4) and memory figures match the system's
       own counters (SET-6);
     - voice mode end to end through Paseo: long pauses between turns, and whether voice
