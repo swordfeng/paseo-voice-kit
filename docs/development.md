@@ -134,8 +134,10 @@ CI doesn't redo work whose inputs haven't changed:
   a merge whose native inputs were already tested. Each platform records its pass in a small
   cache entry (`native-ok-<platform>-<hash>`).
 - When a platform does build, the Qwen worker and the MLX helper are restored from caches
-  keyed by their sources, build scripts, the workflow and the runner image (plus Xcode for
-  MLX). The smoke test's model downloads are cached once for all platforms, keyed by
+  keyed by their sources, build scripts, the Vulkan toolchain pins and the runner image (plus
+  Xcode for MLX). The Rust cache also keeps the vendored whisper-rs-sys build (a workspace
+  member for this reason), and files under `server/` get their last commit's time so Cargo
+  rebuilds only what changed. The smoke test's model downloads are cached once for all platforms, keyed by
   `server/catalog.json`.
 - CI also runs on pushes to main. Pull requests can only restore caches from their own branch
   or the default branch, so this keeps every pull request's caches warm. A new push to a pull

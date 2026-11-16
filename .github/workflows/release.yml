@@ -237,13 +237,15 @@ jobs:
           python3 scripts/collect-licenses.py "$RUNNER_TEMP/cargo-metadata.json" "$RUNNER_TEMP/voicekit-notices"
           echo "VOICEKIT_NOTICES=$RUNNER_TEMP/voicekit-notices" >> "$GITHUB_ENV"
       # Workers are rebuilt only when their inputs change: the key covers their sources, build
-      # scripts, this workflow (toolchain pins) and the runner image. Release tags always build
-      # from source and never use or fill these caches.
+      # scripts, the Vulkan toolchain pins and the runner image. Other edits to this workflow
+      # don't invalidate them. Release tags always build from source and never use or fill these
+      # caches.
       - name: Runner image for worker cache keys
         id: runner-image
         shell: bash
         run: |
-          echo "version=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+          pins=$(python3 -c 'import hashlib, os; print(hashlib.sha256((os.environ["VULKAN_CONDA_PACKAGES"] + " " + os.environ["VULKAN_SDK_VERSION"]).encode()).hexdigest()[:12])')
+          echo "version=${ImageOS:-unknown}-${ImageVersion:-unknown}-vk$pins" >> "$GITHUB_OUTPUT"
           # A restore unpacks over what is there; start from empty folders.
           rm -rf server/target/release/gguf-runtime server/target/release/mlx-runtime
       - name: Restore Qwen GGUF worker
@@ -252,7 +254,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: server/target/release/gguf-runtime
-          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt', '.github/workflows/release.yml') }}
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt') }}
       - name: Build isolated Qwen GGUF worker
         if: steps.qwen-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -265,7 +267,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: server/target/release/gguf-runtime
-          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt', '.github/workflows/release.yml') }}
+          key: qwen-worker-${{ matrix.key }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('server/vendor/qwen-sources/**', 'server/qwen-worker/**', 'scripts/build-qwen-worker.py', 'licenses/yyjson-MIT.txt') }}
       - name: Select Swift build tools
         if: matrix.key == 'darwin-arm64'
         uses: maxim-lobanov/setup-xcode@v1
@@ -282,19 +284,19 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: server/target/release/mlx-runtime
-          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py', '.github/workflows/release.yml') }}
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py') }}
       - name: Build bundled native MLX worker
         if: matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           xcodebuild -downloadComponent MetalToolchain
-          python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 900
+          python3 scripts/build-mlx-worker.py --target-dir server/target/release --timeout 1800
       - name: Save bundled native MLX worker
         if: ${{ matrix.key == 'darwin-arm64' && steps.mlx-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/cache/save@v4
         with:
           path: server/target/release/mlx-runtime
-          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py', '.github/workflows/release.yml') }}
+          key: mlx-worker-${{ steps.runner-image.outputs.version }}-${{ steps.mlx-key.outputs.xcode }}-${{ hashFiles('server/mlx-worker/**', 'scripts/build-mlx-worker.py') }}
       - name: Package
         shell: bash
         run: |
