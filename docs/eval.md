@@ -44,6 +44,13 @@ samples in 2.4 s) and Whisper read them back exactly. ggml's
 `test-backend-ops` on Dozen: ARGSORT 46 pass, 0 fail (ne0 = 2048 is reported
 unsupported, so not run there); TOP_K 533 pass, 0 fail.
 
+With the bypass built in (`680c250`, no environment overrides) on the same WSL
+host: 0.6B Q4 zh 20.5 s (first load included) and en 2.0 s; the 7 voices × 6
+sentences matrix at 0.4/42 ended normally 42 of 42 with no `token_limit` and no
+retry (median 3.0 s, max 21.7 s including each voice's first load, 251 s in
+all); 1.7B Q8 zh 34.1 s (first load) and en 2.3 s. Every output was read back
+by Whisper. All ran on `Vulkan0` (Dozen).
+
 The final native regression (`scripts/smoke-real-models.py --accelerator auto
 --expect-gpu --large-qwen --no-downloads`, with explicit model/output paths)
 completed in 17.74s. Actual device metadata and native logs confirmed Vulkan
