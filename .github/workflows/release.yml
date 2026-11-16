@@ -239,6 +239,36 @@ jobs:
         working-directory: server
         shell: bash
         run: cargo build --locked --release --features "${{ matrix.features }}"
+      # whisper-rs-sys's build script copies the ggml shared libraries and backend modules next
+      # to the executable, but only when it runs. With whisper.cpp cached it doesn't, and the
+      # Rust cache drops loose files in target/release, so copy them from the cached build
+      # output with the build script's rules (copy_runtime_libs). macOS links statically.
+      - name: Put the ggml libraries next to the executable
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, os, re, shutil
+          outs = [p for p in glob.glob("server/target/release/build/whisper-rs-sys-*/out") if os.path.isdir(p)]
+          if not outs:
+              raise SystemExit("no whisper-rs-sys build output")
+          out = max(outs, key=lambda p: max((os.path.getmtime(f) for f in glob.glob(p + "/*/*")), default=0))
+          copied = 0
+          for sub, modules in (("lib", False), ("bin", True)):
+              folder = os.path.join(out, sub)
+              if not os.path.isdir(folder):
+                  continue
+              for name in os.listdir(folder):
+                  soname = re.fullmatch(r"lib.+\.so\.\d+", name) is not None
+                  module = modules and name.startswith("libggml-") and name.endswith(".so")
+                  if not (soname or module or name.lower().endswith(".dll")):
+                      continue
+                  dst = os.path.join("server/target/release", name)
+                  if os.path.lexists(dst):
+                      os.remove(dst)
+                  shutil.copy(os.path.join(folder, name), dst)
+                  copied += 1
+          print(copied, "libraries from", out)
+          PY
       - name: Nested CMake diagnostics (Windows)
         if: failure() && runner.os == 'Windows'
         shell: pwsh
