@@ -46,7 +46,7 @@ export const zhCN: Messages = {
     title: "安装 Voice Kit 语音服务？",
     body: "Voice Kit 通过一个单独的原生程序在这台电脑上处理语音。它从 {{host}} 下载，运行前会按固定的校验和进行验证。",
     bodyNoSource: "Voice Kit 通过一个单独的原生程序在这台电脑上处理语音，运行前会按固定的校验和进行验证。",
-    models: "语音模型需要另外下载，每个约 100 MB 到 2 GB，在你选择或首次需要时获取。模型保留各自的许可证。",
+    models: "安装后，Voice Kit 会接着下载为这台电脑选定的语音模型，总共约 1 GB；其他模型在你选择后才下载。如果不想自动下载，请在安装前到“高级”中关闭“自动下载模型”。模型保留各自的许可证。",
     declineHint: "如果不安装，Voice Kit 会关闭，Paseo 继续使用内置语音。",
     install: "安装",
     decline: "不安装",

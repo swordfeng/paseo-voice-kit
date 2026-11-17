@@ -46,7 +46,7 @@ export const es: Messages = {
     title: "¿Instalar el servidor de voz de Voice Kit?",
     body: "Voice Kit procesa la voz en este equipo con un programa nativo aparte. Se descarga desde {{host}} y se verifica con una suma de comprobación fijada antes de ejecutarse.",
     bodyNoSource: "Voice Kit procesa la voz en este equipo con un programa nativo aparte, que se verifica con una suma de comprobación fijada antes de ejecutarse.",
-    models: "Los modelos de voz se descargan aparte, de unos 100 MB a 2 GB cada uno, cuando los eliges o la primera vez que hacen falta. Conservan sus propias licencias.",
+    models: "Después de instalarlo, Voice Kit también descarga los modelos de voz elegidos para este equipo, alrededor de 1 GB en total. Los demás modelos se descargan cuando los eliges. Para evitarlo, desactiva Descargar modelos automáticamente en Avanzado antes de instalar. Los modelos conservan sus propias licencias.",
     declineHint: "Si no lo instalas, Voice Kit se desactiva y Paseo sigue usando su voz integrada.",
     install: "Instalar",
     decline: "No instalar",

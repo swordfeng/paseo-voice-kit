@@ -48,7 +48,7 @@ export const en = {
     title: "Install the Voice Kit speech server?",
     body: "Voice Kit runs speech on this computer with a separate native program. It downloads from {{host}} and is checked against a pinned checksum before it runs.",
     bodyNoSource: "Voice Kit runs speech on this computer with a separate native program, checked against a pinned checksum before it runs.",
-    models: "Speech models are separate downloads of about 100 MB to 2 GB each, fetched when you choose them or first need them. They keep their own licenses.",
+    models: "After you install, Voice Kit also downloads the speech models chosen for this computer, about 1 GB in all. Other models download when you choose them. To skip this, turn off Download models automatically in Advanced before you install. Models keep their own licenses.",
     declineHint: "If you don't install it, Voice Kit turns off and Paseo keeps its built-in speech.",
     install: "Install",
     decline: "Don't install",

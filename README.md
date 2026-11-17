@@ -48,7 +48,9 @@ Plugin source. Voice Kit isn't in the Paseo plugin registry or on npm.
 
 The speech server (`voicekit`) is a separate native program. Prebuilt servers for macOS
 (Apple Silicon and Intel), Linux (x64 and arm64) and Windows (x64) are published with the
-[v0.1.1 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.1). The
+[v0.1.1 release](https://github.com/swordfeng/paseo-voice-kit/releases/tag/v0.1.1). On Linux the
+prebuilt server needs glibc 2.34 and the C++ runtime of GCC 12 or later (Ubuntu 22.04, Debian 12,
+Fedora 36 or later); a Vulkan driver is needed only for the GPU. The
 first time Voice Kit needs a server version, it asks before downloading the one for your
 platform and shows where it comes from; a plugin update that needs a new server version asks
 again. The download is checked against a SHA-256 pinned in the plugin, then unpacked into
