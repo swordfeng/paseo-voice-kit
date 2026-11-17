@@ -8,11 +8,11 @@ Voice Kit 会在守护进程所在的电脑上运行一个语音服务 voicekit�
 
 ## 安装与要求
 
-语音服务是一个单独的程序。macOS（Apple 芯片和 Intel）、Linux（x64 和 arm64）和 Windows（x64）的现成版本来自本项目在 GitHub 上的 v0.1.1 版本。Voice Kit 下载某个版本的语音服务之前会先征求你的同意，说明下载来源，并用固定的校验和核对下载的文件。插件更新后如果需要新版本的语音服务，会再次征求同意。如果你拒绝，不会下载任何东西，Voice Kit 会关闭，你的语音设置保持原样。你也可以在“程序路径”设置中指定自己构建的版本；构建方法见 [README](https://github.com/swordfeng/paseo-voice-kit#readme)。
+语音服务是一个单独的程序。macOS（Apple 芯片和 Intel）、Linux（x64 和 arm64）和 Windows（x64）的现成版本来自本项目在 GitHub 上的 v0.1.1 版本。Voice Kit 下载某个版本的语音服务之前会先征求你的同意，说明下载来源，并用固定的校验和核对下载的文件。插件更新后如果需要新版本的语音服务，会再次征求同意。同一个提示还会说明：安装后会接着下载为这台电脑选定的语音模型，总共约 1 GB；如果不想这样，请在安装前到“高级”中关闭“自动下载模型”。如果你拒绝，不会下载任何东西，Voice Kit 会关闭，你的语音设置保持原样。你也可以在“程序路径”设置中指定自己构建的版本；构建方法见 [README](https://github.com/swordfeng/paseo-voice-kit#readme)。
 
 内置的 Qwen3-TTS 模型运行在语音服务自带的一个辅助程序中。你添加的 MLX 版 Qwen3-TTS 模型运行在它自带的另一个辅助程序中，需要 Apple 芯片、macOS 14 或更高版本的 Mac。模型权重和其他模型一样单独下载。
 
-Voice Kit 需要 Paseo 0.15.4 或更高版本，并已启用插件。0.1.1 版已在 Apple 芯片的 Mac 和配备 NVIDIA 显卡的 Windows 上手动检查过，两者都做过全新安装；在 Linux 上检查了 CPU，并在 WSL 下检查了 NVIDIA 显卡。每个发布平台都会自动用真实模型在 CPU 上做检查。Intel Mac、Linux 原生显卡驱动以及 AMD 或 Intel 显卡上的 GPU 语音尚未检查。
+Voice Kit 需要 Paseo 0.15.4 或更高版本，并已启用插件。0.1.1 版已在 Apple 芯片的 Mac 和配备 NVIDIA 显卡的 Windows 上手动检查过，两者都做过全新安装；在 Linux 上检查了 CPU，并在 WSL 下检查了 NVIDIA 显卡。每个发布平台都会自动用真实模型在 CPU 上做检查。在 Linux 上，现成的语音服务需要 glibc 2.34 和 GCC 12 或更高版本的 C++ 运行库（Ubuntu 22.04、Debian 12、Fedora 36 或更高版本）；只有使用 GPU 时才需要 Vulkan 驱动。Intel Mac、Linux 原生显卡驱动以及 AMD 或 Intel 显卡上的 GPU 语音尚未检查。
 
 ## 数据去向
 
@@ -37,7 +37,7 @@ Voice Kit 需要 Paseo 0.15.4 或更高版本，并已启用插件。0.1.1 版�
 - 新安装只启用 Supertonic 3：支持 31 种语言，在 CPU 上运行。Qwen3-TTS 0.6B 和 1.7B 支持 10 种语言。它们是可选的，启用后才下载，能用 GPU 时使用 GPU（已在 Apple 芯片的 Mac 和 NVIDIA 显卡上检查过）。如果 GPU 无法运行它们，会改在 CPU 上运行，并在模型卡片上说明。
 - 每个语音模型有自己的声线，可在它的卡片上选择和试听。默认情况下，Supertonic 3 和 Qwen3-TTS 使用两个相近的声线，所以混合多种语言的回复听起来也相似。
 
-内置模型从 Hugging Face 和 GitHub 下载到 Voice Kit 的数据文件夹（默认是 `~/.paseo/plugin-data/voice-kit/models`），并用固定的校验和核对。除非你关闭“自动下载模型”，选择模型后会立即下载。Parakeet v3 和 SenseVoice 使用 Paseo 自己的那一份：只下载一次，Voice Kit 和 Paseo 都能看到，移除时 Paseo 那边也会一起移除。下载的模型保留各自的许可证，见 MODEL_LICENSES.md；Supertonic 3 的 OpenRAIL-M 许可证包含使用限制。
+内置模型从 Hugging Face 和 GitHub 下载到 Voice Kit 的数据文件夹（默认是 `~/.paseo/plugin-data/voice-kit/models`），并用固定的校验和核对。除非你关闭“自动下载模型”，为这台电脑选定的模型会在安装语音服务后立即下载，其他模型在你选择后立即下载。Parakeet v3 和 SenseVoice 使用 Paseo 自己的那一份：只下载一次，Voice Kit 和 Paseo 都能看到，移除时 Paseo 那边也会一起移除。下载的模型保留各自的许可证，见 MODEL_LICENSES.md；Supertonic 3 的 OpenRAIL-M 许可证包含使用限制。
 
 在 Mac 上，可以在“高级”的实验性选项中为 Whisper 打开神经网络引擎。它只加快 Whisper；不打开时，Whisper 使用 GPU。打开后需要下载约 1.2 GB，并做一次耗时几分钟的准备。默认关闭。
 

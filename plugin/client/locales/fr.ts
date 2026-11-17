@@ -46,7 +46,7 @@ export const fr: Messages = {
     title: "Installer le serveur vocal de Voice Kit ?",
     body: "Voice Kit traite la voix sur cet ordinateur avec un programme natif distinct. Il est téléchargé depuis {{host}} et vérifié par une somme de contrôle épinglée avant de s'exécuter.",
     bodyNoSource: "Voice Kit traite la voix sur cet ordinateur avec un programme natif distinct, vérifié par une somme de contrôle épinglée avant de s'exécuter.",
-    models: "Les modèles vocaux sont des téléchargements séparés d'environ 100 Mo à 2 Go chacun, récupérés quand vous les choisissez ou à leur première utilisation. Ils gardent leur propre licence.",
+    models: "Après l'installation, Voice Kit télécharge aussi les modèles vocaux choisis pour cet ordinateur, environ 1 Go au total. Les autres modèles sont téléchargés quand vous les choisissez. Pour éviter cela, désactivez Télécharger les modèles automatiquement dans Avancé avant d'installer. Les modèles gardent leur propre licence.",
     declineHint: "Si vous ne l'installez pas, Voice Kit se désactive et Paseo garde sa voix intégrée.",
     install: "Installer",
     decline: "Ne pas installer",
